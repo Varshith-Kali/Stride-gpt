@@ -79,10 +79,12 @@ type AuthMethod =
   | "Username/password"
   | "OAuth 2.0"
   | "SAML"
+  | "SSO"
   | "API keys"
   | "JWT"
   | "Biometric"
   | "Certificate-based";
+
 
 interface Threat {
   id: string;
@@ -203,11 +205,13 @@ const AUTH_METHODS: AuthMethod[] = [
   "Username/password",
   "OAuth 2.0",
   "SAML",
+  "SSO",
   "API keys",
   "JWT",
   "Biometric",
   "Certificate-based",
 ];
+
 
 const EXAMPLE_APPS = [
   {

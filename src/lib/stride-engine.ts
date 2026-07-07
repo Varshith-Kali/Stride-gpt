@@ -24,10 +24,12 @@ export type AuthMethod =
   | "Username/password"
   | "OAuth 2.0"
   | "SAML"
+  | "SSO"
   | "API keys"
   | "JWT"
   | "Biometric"
   | "Certificate-based";
+
 
 export interface ThreatModelInput {
   appName: string;

@@ -29,6 +29,7 @@ const AUTH_METHODS: ReadonlySet<AuthMethod> = new Set<AuthMethod>([
   "Username/password",
   "OAuth 2.0",
   "SAML",
+  "SSO",
   "API keys",
   "JWT",
   "Biometric",
