@@ -45,8 +45,6 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
-  output: "standalone",
-
   // ── Security ──────────────────────────────────────────────────────
   // ReactStrictMode catches subtle bugs by double-invoking effects in dev.
   reactStrictMode: true,
