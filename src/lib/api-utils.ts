@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { validateConfig, LlmConfig } from "@/lib/llm-config";
 import { LlmError } from "@/lib/stride-engine";
 
-/** Max request body size (1 MB) — protects against oversized payloads. */
-const MAX_BODY_BYTES = 1_048_576;
+/** Max request body size — raised to 20 MB to allow base64-encoded image payloads.
+ *  Image validation (count, size, MIME) happens inside the route handler. */
+const MAX_BODY_BYTES = 20_971_520; // 20 MB
 
 /**
  * Safely parse a JSON request body with size and content-type guards.

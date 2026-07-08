@@ -10,6 +10,7 @@ import type {
   AuthMethod,
   ThreatModelInput,
   Threat,
+  LlmImage,
 } from "@/lib/stride-engine";
 
 const APP_TYPES: ReadonlySet<AppType> = new Set<AppType>([
@@ -139,4 +140,44 @@ export function sanitizeThreats(threats: unknown[]): Threat[] {
         : "Medium",
     }))
     .slice(0, LIMITS.MAX_THREATS);
+}
+
+/** Allowed image MIME types for architecture diagram uploads. */
+const ALLOWED_IMAGE_TYPES = new Set<LlmImage["mimeType"]>([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+]);
+
+/** Max images per request. */
+const MAX_IMAGES = 5;
+
+/** Max base64 string length per image (~4 MB raw = ~5.5 MB base64). */
+const MAX_IMAGE_B64_CHARS = 5_592_405;
+
+/**
+ * Validate an array of LlmImage objects received from the client.
+ * Silently drops invalid entries so generation is never blocked by a bad image.
+ * Returns at most MAX_IMAGES validated images.
+ */
+export function validateImages(raw: unknown): LlmImage[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as unknown[])
+    .filter((item): item is LlmImage => {
+      if (!item || typeof item !== "object") return false;
+      const img = item as Record<string, unknown>;
+      if (!ALLOWED_IMAGE_TYPES.has(img.mimeType as LlmImage["mimeType"])) return false;
+      if (typeof img.dataUrl !== "string") return false;
+      // Verify it looks like a data-URL with the declared MIME type
+      if (!img.dataUrl.startsWith(`data:${img.mimeType as string};base64,`)) return false;
+      // Size guard — reject oversized images server-side too
+      if (img.dataUrl.length > MAX_IMAGE_B64_CHARS) return false;
+      return true;
+    })
+    .map((img) => ({
+      mimeType: img.mimeType as LlmImage["mimeType"],
+      dataUrl:  img.dataUrl as string,
+      name:     typeof img.name === "string" ? clamp(sanitizeText(img.name), 200) : "image",
+    }))
+    .slice(0, MAX_IMAGES);
 }

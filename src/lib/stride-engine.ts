@@ -8,6 +8,20 @@
 import type { LlmConfig } from "@/lib/llm-config";
 import { sanitizeThreats, sanitizeText, clamp, LIMITS } from "@/lib/validation";
 
+/**
+ * A session-only image supplied by the user (architecture diagram etc.).
+ * Held in React state client-side; sent as base64 data-URLs in the request
+ * body — never persisted to any storage layer.
+ */
+export interface LlmImage {
+  /** MIME type — one of the server-side ALLOWED_IMAGE_TYPES. */
+  mimeType: "image/png" | "image/jpeg" | "image/webp";
+  /** Full data-URL: "data:image/png;base64,..." */
+  dataUrl: string;
+  /** Original filename for display only. Never sent to the LLM. */
+  name: string;
+}
+
 export type AppType =
   | "Web application"
   | "Mobile application"
@@ -115,6 +129,25 @@ export interface GherkinResult {
     when: string;
     then: string[];
   }[];
+}
+
+/** A single prioritized recommendation produced by generateRecommendations. */
+export interface Recommendation {
+  /** Threat IDs this recommendation addresses (e.g. ["T001", "T003"]). */
+  threatIds: string[];
+  /** One-sentence imperative action. */
+  action: string;
+  /** 3–5 concrete implementation steps. */
+  steps: string[];
+  /** Implementation effort relative estimate. */
+  effort: "Low" | "Medium" | "High";
+  /** Expected risk reduction summary. */
+  riskReduction: string;
+}
+
+export interface RecommendationResult {
+  recommendations: Recommendation[];
+  executiveSummary: string;
 }
 
 const SYSTEM_PROMPT = `You are STRIDE GPT, an elite security architect specializing in threat modeling using the STRIDE methodology (Spoofing, Tampering, Repudiation, Information Disclosure, Denial of Service, Elevation of Privilege). You are also an expert in OWASP LLM Top 10, OWASP Agentic AI Top 10 (ASI), MITRE ATT&CK Enterprise, and MITRE ATLAS for ML/AI systems. You produce precise, actionable, structured security analysis.`;
@@ -368,9 +401,43 @@ function classifyOpenAIError(status: number, body: string): LlmError {
  *   server-side fetch. It is never logged, cached, or returned to the client.
  * - The request body is validated and sanitized upstream before reaching here.
  */
+/**
+ * A single content part for a multimodal LLM message.
+ * Matches the OpenAI Responses API input_text / input_image shapes.
+ */
+type ContentPart =
+  | { type: "input_text"; text: string }
+  | { type: "input_image"; image_url: string };
+
+type LlmMessage =
+  | { role: "user" | "assistant"; content: string }
+  | { role: "user"; content: ContentPart[] };
+
+/**
+ * Build a multimodal user message from a text prompt and optional images.
+ * Images are appended as input_image parts after the text.
+ * If no images, returns a plain string content message (lower token overhead).
+ */
+function buildUserMessage(
+  text: string,
+  images?: LlmImage[]
+): LlmMessage {
+  if (!images || images.length === 0) {
+    return { role: "user", content: text };
+  }
+  const parts: ContentPart[] = [
+    { type: "input_text", text },
+    ...images.map((img): ContentPart => ({
+      type: "input_image",
+      image_url: img.dataUrl,
+    })),
+  ];
+  return { role: "user", content: parts };
+}
+
 async function callLLM(
   config: LlmConfig,
-  messages: { role: "user" | "assistant"; content: string }[]
+  messages: LlmMessage[]
 ): Promise<string> {
   let res: Response;
   try {
@@ -465,14 +532,19 @@ async function callLLM(
 
 export async function generateThreatModel(
   config: LlmConfig,
-  input: ThreatModelInput
+  input: ThreatModelInput,
+  images?: LlmImage[]
 ): Promise<ThreatModelResult> {
   const context = buildContextString(input);
   const isAi =
     input.appType === "Generative AI application" ||
     input.appType === "Agentic AI application";
 
-  const prompt = `${context}
+  const prompt = `${context}${
+    images && images.length > 0
+      ? `\n- Architecture diagrams provided: ${images.length} image(s) — analyse them for additional trust boundaries, data flows, and components.`
+      : ""
+  }
 
 TASK: Produce a comprehensive STRIDE threat model for this application.${
     isAi
@@ -502,7 +574,7 @@ Return ONLY a JSON object (no prose, no markdown fences) with this exact shape:
 Produce at least 8 and up to 14 distinct threats covering all six STRIDE categories.`;
 
   const raw = await callLLM(config, [
-    { role: "user", content: prompt },
+    buildUserMessage(prompt, images),
   ]);
   const parsed = parseJsonLoose(raw);
   if (!parsed || !Array.isArray(parsed.threats)) {
@@ -911,3 +983,96 @@ Return ONLY a JSON object (no prose, no markdown fences) with this shape:
   };
 }
 
+/**
+ * Generate prioritized security recommendations.
+ *
+ * TOKEN-OPTIMIZED DESIGN:
+ * Instead of re-sending the full original prompt (~1500 tokens), we send a
+ * compact structured summary (~300-500 tokens) containing:
+ *   1. One-line app summary (type, auth, flags, description excerpt)
+ *   2. Each threat as one compact line: ID | STRIDE | Risk | Title
+ *   3. Only justification lines where the analyst filled something in
+ *   4. Images if provided (same session images as the threat model call)
+ *
+ * The LLM has all domain knowledge from training; it needs structured signal,
+ * not repetition of the full description.
+ */
+export async function generateRecommendations(
+  config: LlmConfig,
+  threats: Threat[],
+  justifications: Record<string, string>,
+  appInput: ThreatModelInput,
+  images?: LlmImage[]
+): Promise<RecommendationResult> {
+  // --- Compact app summary (~30 tokens) ---
+  const flags = [
+    appInput.internetFacing     ? "internet-facing" : null,
+    appInput.sensitiveData      ? "sensitive-data"  : null,
+    appInput.usesCloud          ? "cloud"           : null,
+    appInput.hasMultipleTenants ? "multi-tenant"    : null,
+  ].filter(Boolean).join(", ");
+
+  const appSummary =
+    `${appInput.appName || "App"} | ${appInput.appType} | ` +
+    `Auth: ${appInput.authentication.join("+") || "none"} | ` +
+    `Flags: ${flags || "none"} | ` +
+    `Desc: ${clamp(sanitizeText(appInput.description), 300)}`;
+
+  // --- Compact threat list: one line per threat, analyst note inline ---
+  const threatLines = threats
+    .map((t) => {
+      const note = justifications[t.id]?.trim();
+      return note
+        ? `${t.id} [${t.strideCategory}/${t.risk}] ${t.threat} | ANALYST: ${clamp(sanitizeText(note), 200)}`
+        : `${t.id} [${t.strideCategory}/${t.risk}] ${t.threat}`;
+    })
+    .join("\n");
+
+  const hasNotes = threats.some((t) => justifications[t.id]?.trim());
+
+  const prompt =
+    `APPLICATION:\n${appSummary}` +
+    (images && images.length > 0
+      ? `\nARCHITECTURE DIAGRAMS: ${images.length} diagram(s) attached — use them for component-specific recommendations.`
+      : "") +
+    `\n\nTHREAT MODEL (${threats.length} threats):\n${threatLines}` +
+    (hasNotes
+      ? "\n\nNOTE: Lines marked ANALYST contain security architect context — weight these heavily when prioritising."
+      : "") +
+    `\n\nTASK: Generate concise, prioritized security recommendations. Group related threats where logical. Prioritize by risk level and analyst context. Be specific and actionable.\n\nReturn ONLY a JSON object (no prose, no markdown fences):\n{\n  "recommendations": [\n    {\n      "threatIds": ["T001", "T002"],\n      "action": "one-sentence imperative action",\n      "steps": ["concrete step 1", "step 2", "step 3"],\n      "effort": "Low | Medium | High",\n      "riskReduction": "what risk this eliminates or reduces"\n    }\n  ],\n  "executiveSummary": "2-3 sentence summary of the overall recommendation posture"\n}`;
+
+  const raw = await callLLM(config, [buildUserMessage(prompt, images)]);
+  const parsed = parseJsonLoose(raw);
+
+  if (!parsed || !Array.isArray(parsed.recommendations)) {
+    return {
+      recommendations: [],
+      executiveSummary: "Unable to generate recommendations. Please try again.",
+    };
+  }
+
+  const recommendations: Recommendation[] = (parsed.recommendations as unknown[])
+    .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
+    .map((r: Record<string, unknown>) => ({
+      threatIds: Array.isArray(r.threatIds)
+        ? (r.threatIds as unknown[]).filter((id): id is string => typeof id === "string").slice(0, 20)
+        : [],
+      action: clamp(sanitizeText((r.action as string) ?? ""), 300),
+      steps: Array.isArray(r.steps)
+        ? (r.steps as unknown[])
+            .filter((s): s is string => typeof s === "string")
+            .map((s) => clamp(sanitizeText(s), 300))
+            .slice(0, 8)
+        : [],
+      effort: (["Low", "Medium", "High"] as readonly string[]).includes(r.effort as string)
+        ? (r.effort as Recommendation["effort"])
+        : "Medium",
+      riskReduction: clamp(sanitizeText((r.riskReduction as string) ?? ""), 300),
+    }))
+    .slice(0, 30);
+
+  return {
+    recommendations,
+    executiveSummary: clamp(sanitizeText((parsed.executiveSummary as string) ?? ""), 1000),
+  };
+}
