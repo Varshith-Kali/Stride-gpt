@@ -1,29 +1,28 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type LlmConfig, type Provider, DEFAULT_MODEL } from "@/lib/llm-config";
 
 /**
  * SECURITY — Session-memory-only API key storage.
  *
- * The user's OpenAI API key is held EXCLUSIVELY in React component state
- * (heap memory). It is NEVER written to:
+ * The user's OpenAI API key is held EXCLUSIVELY in module-level memory.
+ * It is NEVER written to:
  *   - localStorage / sessionStorage / IndexedDB / cookies
  *   - Any server-side store or session
  *   - Any log, console, or network telemetry
  *
  * The key lives only for the duration of the browser tab. Closing the tab
- * or refreshing the page clears it completely. The user must re-enter it
- * each session — this is intentional and is the most secure design for a
- * tool that handles third-party credentials without a backend auth layer.
+ * or refreshing the page clears it completely. This is intentional — it is
+ * the most secure design for a tool handling third-party credentials without
+ * a backend auth layer.
  *
  * In transit: the key travels only within the encrypted HTTPS request body
- * of each generation call, bound to a specific user action. It is never sent
- * as a header or URL parameter from the client.
+ * of each generation call. It is never sent as a URL parameter or header
+ * from the client side.
  */
 
-// Module-level ref so the config survives React re-renders without localStorage.
-// It is cleared when the module is unloaded (i.e. page refresh / tab close).
+// Module-level config store — cleared on page unload automatically (heap memory).
 let _sessionConfig: LlmConfig | null = null;
 const _listeners = new Set<() => void>();
 
@@ -32,15 +31,20 @@ function notifyAll() {
 }
 
 export function useLLMConfig() {
-  // Local state drives re-renders; module ref is the single source of truth.
   const [, forceRender] = useState(0);
+  const cleanupRef = useRef<(() => void) | null>(null);
 
-  // Subscribe this component to config changes from other components.
-  const isSubscribed = useRef(false);
-  if (!isSubscribed.current) {
-    isSubscribed.current = true;
-    _listeners.add(() => forceRender((n) => n + 1));
-  }
+  // Register this component as a listener on mount, unregister on unmount.
+  // Using useEffect ensures we never access refs during render (lint: react-hooks/refs).
+  useEffect(() => {
+    const listener = () => forceRender((n) => n + 1);
+    _listeners.add(listener);
+    cleanupRef.current = () => _listeners.delete(listener);
+    return () => {
+      _listeners.delete(listener);
+      cleanupRef.current = null;
+    };
+  }, []);
 
   const config = _sessionConfig;
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -41,28 +41,13 @@ export function ApiConfigDialog({
 }) {
   const provider: Provider = "openai";
   const [apiKey, setApiKey] = useState("");
-  const [model, setModel] = useState(DEFAULT_MODEL.openai);
+  const [model, setModel] = useState(current?.model ?? DEFAULT_MODEL.openai);
   const [showKey, setShowKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<
     { ok: boolean; message: string } | null
   >(null);
 
-  // Re-sync when dialog opens — pre-fill model if already configured this session.
-  // We intentionally do NOT pre-fill the API key: the user must re-enter it
-  // each time the dialog opens (session-memory model — no persistence).
-  useEffect(() => {
-    if (open) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setApiKey("");          // always blank — key is never persisted
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setModel(current?.model ?? DEFAULT_MODEL.openai);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setTestResult(null);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setShowKey(false);
-    }
-  }, [open, current]);
 
   const handleSave = () => {
     if (!apiKey.trim()) {
