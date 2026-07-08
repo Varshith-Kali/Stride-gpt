@@ -1134,7 +1134,9 @@ function ThreatCard({
           <p className="text-sm text-neutral-600 leading-relaxed mb-2.5">
             {threat.description}
           </p>
-          <div className="flex items-center gap-3 flex-wrap text-xs pt-1">
+
+          {/* Component + MITRE metadata — its own dedicated row */}
+          <div className="flex items-center gap-3 flex-wrap text-xs pb-1">
             <span className="text-neutral-500">
               <span className="text-neutral-400">Component:</span>{" "}
               {threat.component}
@@ -1152,7 +1154,9 @@ function ThreatCard({
                 ))}
               </div>
             )}
-           {/* Collapsible current controls textarea */}
+          </div>
+
+          {/* Current controls — always a full-width block below metadata, left-anchored */}
           <div className="mt-3 pt-3 border-t border-neutral-100">
             <button
               type="button"
@@ -1184,18 +1188,20 @@ function ThreatCard({
                     id={`control-${threat.id}`}
                     value={currentControl}
                     onChange={(e) => onCurrentControlChange(e.target.value)}
-                    placeholder={`Describe existing controls in your organization for ${threat.id}... e.g. "MFA enforced on all admin accounts via Azure AD Conditional Access"`}
+                    placeholder={`Describe existing controls for ${threat.id}... e.g. "MFA enforced on all admin accounts via Azure AD Conditional Access; WAF rules block common injection patterns"`}
                     maxLength={500}
-                    rows={6}
-                    className="mt-2 w-full text-xs text-neutral-700 placeholder-neutral-400 bg-neutral-50 border border-neutral-200 rounded-lg p-3 resize-y focus:outline-none focus:ring-1 focus:ring-neutral-400 min-h-[120px]"
+                    rows={5}
+                    className="mt-2 w-full text-xs text-neutral-700 placeholder-neutral-400 bg-neutral-50 border border-neutral-200 rounded-lg p-3 resize-y focus:outline-none focus:ring-1 focus:ring-neutral-400 min-h-[110px]"
                   />
-                  <div className="flex justify-end mt-1">
+                  <div className="flex justify-between items-center mt-1">
+                    <span className="text-[10px] text-neutral-400">
+                      Used in Excel export &amp; as context for the LLM
+                    </span>
                     <span className="text-[10px] text-neutral-400">{currentControl.length}/500</span>
                   </div>
                 </motion.div>
               )}
             </AnimatePresence>
-          </div>
           </div>
         </div>
       </div>
