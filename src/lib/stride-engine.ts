@@ -1,9 +1,9 @@
 /**
  * STRIDE GPT — Threat modeling engine.
- * Calls Groq or Google Gemini directly using the user-provided API key.
- * No z.ai SDK is used for content generation.
+ * Calls the OpenAI Responses API (POST /v1/responses) using the user-provided
+ * API key. The key is passed server-side only — never stored or logged.
  *
- * All functions run server-side only.
+ * All functions in this module run server-side only (Next.js API routes).
  */
 import type { LlmConfig } from "@/lib/llm-config";
 import { sanitizeThreats, sanitizeText, clamp, LIMITS } from "@/lib/validation";
@@ -131,7 +131,18 @@ function buildContextString(input: ThreatModelInput): string {
 - Multi-tenant: ${input.hasMultipleTenants ? "Yes" : "No"}`;
 }
 
-function parseJsonLoose(text: string): any {
+/**
+ * Parse loose LLM JSON output, stripping code fences and extracting the
+ * first valid {...} or [...] block. Returns the parsed value cast to a
+ * loose record type, or null on failure.
+ *
+ * Typed as `Record<string, unknown>` (rather than `any`) so callers get
+ * IntelliSense on property access and cannot silently pass the result to
+ * typed functions without explicit narrowing. Array results (e.g. DREAD)
+ * are accessed at call sites via `parsed as unknown[]`.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseJsonLoose(text: string): Record<string, any> | null {
   // Strip code fences and extract the first {...} or [...] block.
   const cleaned = text.replace(/```json\s*/gi, "").replace(/```\s*$/g, "").trim();
   const start = cleaned.search(/[{[]/);
@@ -164,6 +175,7 @@ function parseJsonLoose(text: string): any {
   if (end === -1) return null;
   const slice = cleaned.slice(start, end + 1);
   try {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return JSON.parse(slice);
   } catch {
     return null;
@@ -259,8 +271,8 @@ async function fetchWithTimeout(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
-  } catch (e: any) {
-    if (e?.name === "AbortError") {
+  } catch (e: unknown) {
+    if (e instanceof Error && e.name === "AbortError") {
       throw new LlmError(
         "timeout",
         `Request timed out after ${timeoutMs / 1000}s. The provider may be overloaded — try again.`
@@ -268,8 +280,9 @@ async function fetchWithTimeout(
     }
     throw new LlmError(
       "network",
-      `Network error reaching provider: ${e?.message ?? "unknown"}`
+      `Network error reaching provider: ${e instanceof Error ? e.message : "unknown"}`
     );
+
   } finally {
     clearTimeout(timer);
   }
@@ -341,9 +354,14 @@ function classifyOpenAIError(status: number, body: string): LlmError {
  * Auth:     Authorization: Bearer <apiKey>
  * Docs:     https://platform.openai.com/docs/api-reference/responses
  *
- * The Responses API accepts an `input` array of message objects and returns
- * `output[0].content[0].text` as the model's response.
- * The system instruction is sent as the first message with role "system".
+ * IMPORTANT: The Responses API does NOT support role:"system" inside the
+ * `input` array. The system instruction must go in the top-level
+ * `instructions` field. The `input` array contains only user/assistant turns.
+ *
+ * Response shape:
+ *   output[0].content[0].text  — standard output_text item
+ *   output[0].content          — plain string (some model variants)
+ *   output[0].text             — direct text field (some internal models)
  *
  * Security:
  * - API key travels only in the encrypted Authorization header of this
@@ -352,14 +370,8 @@ function classifyOpenAIError(status: number, body: string): LlmError {
  */
 async function callLLM(
   config: LlmConfig,
-  messages: { role: "system" | "user" | "assistant"; content: string }[]
+  messages: { role: "user" | "assistant"; content: string }[]
 ): Promise<string> {
-  // Prepend the system prompt as the first message in the input array.
-  const input = [
-    { role: "system" as const, content: SYSTEM_PROMPT },
-    ...messages,
-  ];
-
   let res: Response;
   try {
     res = await fetchWithTimeout(
@@ -372,7 +384,9 @@ async function callLLM(
         },
         body: JSON.stringify({
           model: config.model,
-          input,
+          // System prompt goes in `instructions`, NOT in the input array.
+          instructions: SYSTEM_PROMPT,
+          input: messages,
         }),
       }
     );
@@ -389,26 +403,63 @@ async function callLLM(
     throw classifyOpenAIError(res.status, errText);
   }
 
-  const data = await res.json().catch(() => null);
+  const data = await res.json().catch(() => null) as Record<string, unknown> | null;
 
-  // OpenAI Responses API: output[0].content[0].text
-  const text = data?.output?.[0]?.content?.[0]?.text;
-  if (typeof text === "string" && text.length > 0) return text;
+  // --- Extract text from all known Responses API output shapes ---
+  //
+  // GPT-5.5 is a reasoning model and returns MULTIPLE output items:
+  //   output[0] = { type: "reasoning", content: [] }   ← empty, skip this
+  //   output[1] = { type: "message",   content: [{type:"output_text", text:"..."}] }
+  //
+  // Standard models return a single output item:
+  //   output[0] = { type: "message", content: [{type:"output_text", text:"..."}] }
+  //
+  // We must iterate ALL output items and find the first "message" type with content.
 
-  // Fallback: some model variants return output[0].content as a plain string
-  const textAlt = data?.output?.[0]?.content;
-  if (typeof textAlt === "string" && textAlt.length > 0) return textAlt;
+  const outputArr = Array.isArray(data?.output)
+    ? (data.output as Record<string, unknown>[])
+    : [];
 
-  // Surface content filter refusals
-  const refusal = data?.output?.[0]?.content?.[0]?.refusal;
-  if (refusal) {
-    throw new LlmError(
-      "provider",
-      `OpenAI refused to generate a response: ${refusal}`
-    );
+  for (const outputItem of outputArr) {
+    // Skip reasoning/thinking items — they have empty content
+    if (outputItem.type === "reasoning") continue;
+
+    // Shape 1 (standard): content is an array of items with .text
+    if (Array.isArray(outputItem.content)) {
+      const contentArr = outputItem.content as Record<string, unknown>[];
+      for (const item of contentArr) {
+        if (typeof item.text === "string" && item.text.length > 0) return item.text;
+        if (typeof item.transcript === "string" && item.transcript.length > 0) return item.transcript;
+      }
+      // Check for content filter refusal
+      for (const item of contentArr) {
+        if (item.refusal) {
+          throw new LlmError("provider", `OpenAI refused to generate a response: ${String(item.refusal)}`);
+        }
+      }
+    }
+
+    // Shape 2: content is a plain string
+    if (typeof outputItem.content === "string" && outputItem.content.length > 0) {
+      return outputItem.content;
+    }
+
+    // Shape 3: some models return .text directly on the output item
+    if (typeof outputItem.text === "string" && outputItem.text.length > 0) {
+      return outputItem.text;
+    }
   }
 
+  // Shape 4: top-level text field (non-standard but seen in some proxies)
+  if (data && typeof (data as Record<string, unknown>).text === "string") {
+    const t = (data as Record<string, unknown>).text as string;
+    if (t.length > 0) return t;
+  }
+
+  // Log full structure for server-side debugging only — never reaches client
+  console.error("[callLLM] Could not extract text. Full response:", JSON.stringify(data)?.slice(0, 2000));
   throw new LlmError("provider", "OpenAI returned an empty or unrecognized response.");
+
 }
 
 
@@ -583,20 +634,20 @@ Return ONLY a JSON object (no prose, no markdown fences) with this exact shape:
   return {
     mitigations: parsed.mitigations
       .filter(
-        (m: unknown) =>
-          m && typeof m === "object" &&
-          typeof (m as any).threat === "string" &&
-          typeof (m as any).mitigation === "string"
+        (m: unknown): m is Record<string, unknown> =>
+          m !== null && typeof m === "object" &&
+          typeof (m as Record<string, unknown>).threat === "string" &&
+          typeof (m as Record<string, unknown>).mitigation === "string"
       )
-      .map((m: any) => ({
+      .map((m: Record<string, unknown>) => ({
         // Normalise the LLM's threat label back to the exact canonical title
         // so the Excel builder's exact-key lookup always finds a match.
         threat:         closestThreatTitle(
-                          clamp(sanitizeText(m.threat), LIMITS.THREAT_TITLE),
+                          clamp(sanitizeText(m.threat as string), LIMITS.THREAT_TITLE),
                           canonicalTitles
                         ),
-        mitigation:     clamp(sanitizeText(m.mitigation),  2000),
-        priority:       (["Low", "Medium", "High"] as const).includes(m.priority)
+        mitigation:     clamp(sanitizeText(m.mitigation as string), 2000),
+        priority:       (["Low", "Medium", "High"] as readonly string[]).includes(m.priority as string)
                           ? (m.priority as "Low" | "Medium" | "High")
                           : "Medium",
         owaspReference: typeof m.owaspReference === "string"
@@ -655,22 +706,22 @@ Return ONLY a JSON array (no prose, no markdown fences) with this shape:
   return (parsed as unknown[])
     .filter(
       (d): d is Record<string, unknown> =>
-        !!d && typeof d === "object" && typeof (d as any).threat === "string"
+        !!d && typeof d === "object" && typeof (d as Record<string, unknown>).threat === "string"
     )
-    .map((d: any) => {
+    .map((d: Record<string, unknown>) => {
       const damage          = clampScore(d.damage);
       const reproducibility = clampScore(d.reproducibility);
       const exploitability  = clampScore(d.exploitability);
       const affectedUsers   = clampScore(d.affectedUsers);
       const discoverability = clampScore(d.discoverability);
       const total = damage + reproducibility + exploitability + affectedUsers + discoverability;
-      const severity: DreadScore["severity"] = SEVERITY_VALUES.includes(d.severity)
-        ? d.severity
+      const severity: DreadScore["severity"] = SEVERITY_VALUES.includes(d.severity as DreadScore["severity"])
+        ? (d.severity as DreadScore["severity"])
         : total >= 30 ? "Critical" : total >= 20 ? "High" : total >= 10 ? "Medium" : "Low";
       return {
         // Normalise the LLM's threat label so Excel DREAD columns map correctly.
         threat:          closestThreatTitle(
-                           clamp(sanitizeText(d.threat), LIMITS.THREAT_TITLE),
+                           clamp(sanitizeText(d.threat as string), LIMITS.THREAT_TITLE),
                            canonicalTitles
                          ),
         damage,
@@ -839,17 +890,17 @@ Return ONLY a JSON object (no prose, no markdown fences) with this shape:
       ? (parsed.scenarios as unknown[])
           .filter(
             (s): s is Record<string, unknown> =>
-              !!s &&
+              s !== null &&
               typeof s === "object" &&
-              typeof (s as any).title === "string" &&
-              typeof (s as any).given === "string" &&
-              typeof (s as any).when  === "string" &&
-              Array.isArray((s as any).then)
+              typeof (s as Record<string, unknown>).title === "string" &&
+              typeof (s as Record<string, unknown>).given === "string" &&
+              typeof (s as Record<string, unknown>).when  === "string" &&
+              Array.isArray((s as Record<string, unknown>).then)
           )
-          .map((s: any) => ({
-            title: clamp(sanitizeText(s.title), 200),
-            given: clamp(sanitizeText(s.given), 500),
-            when:  clamp(sanitizeText(s.when),  500),
+          .map((s: Record<string, unknown>) => ({
+            title: clamp(sanitizeText(s.title as string), 200),
+            given: clamp(sanitizeText(s.given as string), 500),
+            when:  clamp(sanitizeText(s.when  as string), 500),
             then:  (s.then as unknown[])
               .filter((t): t is string => typeof t === "string")
               .map((t) => clamp(sanitizeText(t), 500))

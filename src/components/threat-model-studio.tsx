@@ -110,11 +110,17 @@ interface ThreatModelResult {
   detectedPatterns: string[];
 }
 
+interface AttackTreeNode {
+  goal: string;
+  subgoals: AttackTreeNode[];
+}
+
 interface AttackTreeResult {
-  root: { goal: string; subgoals: any[] };
+  root: AttackTreeNode;
   mermaid: string;
   narrative: string;
 }
+
 
 interface MitigationResult {
   mitigations: {
@@ -434,9 +440,10 @@ export function ThreatModelStudio({
         () => resultsRef.current?.scrollIntoView({ behavior: "smooth" }),
         200
       );
-    } catch (e: any) {
-      setError(e.message);
-      toast.error(e.message);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Unexpected error generating threat model";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setLoading(null);
     }
@@ -465,9 +472,10 @@ export function ThreatModelStudio({
         () => resultsRef.current?.scrollIntoView({ behavior: "smooth" }),
         200
       );
-    } catch (e: any) {
-      setError(e.message);
-      toast.error(e.message);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Unexpected error generating attack tree";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setLoading(null);
     }
@@ -496,9 +504,10 @@ export function ThreatModelStudio({
         () => resultsRef.current?.scrollIntoView({ behavior: "smooth" }),
         200
       );
-    } catch (e: any) {
-      setError(e.message);
-      toast.error(e.message);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Unexpected error generating mitigations";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setLoading(null);
     }
@@ -527,9 +536,10 @@ export function ThreatModelStudio({
         () => resultsRef.current?.scrollIntoView({ behavior: "smooth" }),
         200
       );
-    } catch (e: any) {
-      setError(e.message);
-      toast.error(e.message);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Unexpected error computing DREAD scores";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setLoading(null);
     }
@@ -558,9 +568,10 @@ export function ThreatModelStudio({
         () => resultsRef.current?.scrollIntoView({ behavior: "smooth" }),
         200
       );
-    } catch (e: any) {
-      setError(e.message);
-      toast.error(e.message);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Unexpected error generating DFD";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setLoading(null);
     }
@@ -589,9 +600,10 @@ export function ThreatModelStudio({
         () => resultsRef.current?.scrollIntoView({ behavior: "smooth" }),
         200
       );
-    } catch (e: any) {
-      setError(e.message);
-      toast.error(e.message);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Unexpected error generating Gherkin tests";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setLoading(null);
     }
@@ -1296,7 +1308,7 @@ function TreeView({
   node,
   depth,
 }: {
-  node: { goal: string; subgoals: any[] };
+  node: AttackTreeNode;
   depth: number;
 }) {
   return (
@@ -1312,7 +1324,7 @@ function TreeView({
         {depth > 0 && <span className="text-neutral-400 mr-2">└─</span>}
         {node.goal}
       </div>
-      {(node.subgoals || []).map((sg: any, i: number) => (
+      {(node.subgoals || []).map((sg: AttackTreeNode, i: number) => (
         <TreeView key={i} node={sg} depth={depth + 1} />
       ))}
     </div>

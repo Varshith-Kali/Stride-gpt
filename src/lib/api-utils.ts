@@ -58,7 +58,7 @@ export async function readJsonRequest<T = unknown>(
   }
 
   // Parse JSON.
-  let data: any;
+  let data: unknown;
   try {
     data = JSON.parse(bodyText);
   } catch {
@@ -72,7 +72,9 @@ export async function readJsonRequest<T = unknown>(
   }
 
   // Validate the LLM config if present.
-  const config = validateConfig((data as any)?.config);
+  const config = validateConfig(
+    data !== null && typeof data === "object" ? (data as Record<string, unknown>).config : undefined
+  );
   // Note: config may legitimately be null if not provided; routes that need
   // a config should check `if (!config) return error`.
 
@@ -86,7 +88,7 @@ export function configRequiredError(): NextResponse {
   return NextResponse.json(
     {
       error:
-        "LLM provider not configured. Open Settings and add an API key for Groq or Gemini.",
+        "LLM provider not configured. Open Settings and enter your OpenAI API key.",
     },
     { status: 400 }
   );

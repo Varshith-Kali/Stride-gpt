@@ -24,7 +24,7 @@ const securityHeaders = [
   //   - Scripts from self + inline (Next.js requires unsafe-inline for hydration)
   //   - Styles from self + inline (Tailwind)
   //   - Images from self + data: (base64 avatars, etc.)
-  //   - Connections to Groq and Gemini APIs only
+  //   - Connections to OpenAI API only
   //   - Fonts from Google Fonts CDN
   //   - No plugins, no object embeds, no framing
   {

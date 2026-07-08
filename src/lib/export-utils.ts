@@ -256,8 +256,14 @@ export function dfdToMarkdown(result: DfdResult): string {
 /* Attack Tree                                                         */
 /* ------------------------------------------------------------------ */
 
+/** Recursive attack-tree node — mirrors the shape returned by stride-engine. */
+interface AttackTreeNode {
+  goal: string;
+  subgoals: AttackTreeNode[];
+}
+
 function attackTreeToLines(
-  node: { goal: string; subgoals: any[] },
+  node: AttackTreeNode,
   depth: number
 ): string[] {
   const lines = [`${"  ".repeat(depth)}- ${node.goal}`];

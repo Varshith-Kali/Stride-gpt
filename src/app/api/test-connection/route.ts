@@ -15,7 +15,7 @@ export const maxDuration = 30;
  * - A minimal Responses call with max_output_tokens=1 validates:
  *     (a) the API key is valid and authorized
  *     (b) the model is accessible to this key
- *   while consuming essentially no tokens.
+ *   while consuming essentially no tokens (16 is the minimum OpenAI accepts).
  *
  * Security:
  * - API key travels only in the Authorization header of this server-side fetch.
@@ -30,7 +30,8 @@ export async function POST(req: NextRequest) {
 
     let { config } = parsed;
     if (!config) {
-      const rawConfig = (parsed.data as any)?.config;
+      const body = parsed.data as Record<string, unknown>;
+      const rawConfig = body?.config as Record<string, unknown> | undefined;
       if (
         rawConfig?.provider === "openai" &&
         typeof rawConfig?.apiKey === "string" &&
@@ -54,7 +55,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Minimal test call to OpenAI Responses API — 1 output token max.
+    // Minimal test call to OpenAI Responses API — 16 output tokens (the minimum allowed).
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);
     let res: Response;
@@ -68,7 +69,7 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({
           model: config.model,
           input: [{ role: "user", content: "ping" }],
-          max_output_tokens: 1,
+          max_output_tokens: 16,
         }),
         signal: controller.signal,
       });
