@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -351,10 +351,10 @@ export function ThreatModelStudio({
   const [mitigations, setMitigations] = useState<MitigationResult | null>(null);
   const [dreadScores, setDreadScores] = useState<DreadScore[] | null>(null);
   const [dfd, setDfd] = useState<DfdResult | null>(null);
-  // Per-threat current controls â€” keyed by threat ID. Session-only state.
+  // Per-threat current controls -- keyed by threat ID. Session-only state.
   const [currentControls, setCurrentControls] = useState<Record<string, string>>({});
 
-  // Session-only image upload state â€” never persisted to any storage.
+  // Session-only image upload state -- never persisted to any storage.
   const { images, addFiles, removeImage, clearAll: clearImages, isFull } = useImageUpload();
 
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -414,7 +414,7 @@ export function ThreatModelStudio({
         body: JSON.stringify({
           config,
           input: buildInput(),
-          // Images are base64 data-URLs â€” zero server persistence
+          // Images are base64 data-URLs -- zero server persistence
           images: images.length > 0
             ? images.map((img) => ({ mimeType: img.mimeType, dataUrl: img.dataUrl, name: img.name }))
             : undefined,
@@ -565,7 +565,7 @@ export function ThreatModelStudio({
 
   const hasAnyResult = threatModel || mitigations || dreadScores || dfd;
 
-  // Bundle for Excel export â€” single STRIDE sheet, with current controls per threat.
+  // Bundle for Excel export -- single STRIDE sheet, with current controls per threat.
   const excelBundle: ExcelBundle = {
     threatModel: threatModel ?? undefined,
     currentControls: currentControls,
@@ -582,7 +582,7 @@ export function ThreatModelStudio({
               Analysis Workspace
             </h2>
             <p className="text-sm text-neutral-500 mt-1">
-            Describe the system Â· generate threat models, mitigations, DREAD scores, and data flow diagrams.
+            Describe the system · generate threat models, mitigations, DREAD scores, and data flow diagrams.
             </p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
@@ -608,9 +608,9 @@ export function ThreatModelStudio({
                 <span className="w-1.5 h-1.5 rounded-full bg-neutral-900" />
                 STRIDE
               </span>
-              <span>Â·</span>
+              <span className="text-neutral-300">|</span>
               <span>OWASP LLM/ASI</span>
-              <span>Â·</span>
+              <span className="text-neutral-300">|</span>
               <span>MITRE ATT&CK</span>
             </div>
           </div>
@@ -689,7 +689,7 @@ export function ThreatModelStudio({
                   id="description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Describe the application: what it does, who uses it, key technologies, integrations, data flows, trust boundariesâ€¦"
+                  placeholder="Describe the application: what it does, who uses it, key technologies, integrations, data flows, trust boundaries..."
                   className="min-h-[140px] rounded-xl resize-y"
                 />
                 <div className="flex items-center justify-between text-xs text-neutral-400">
@@ -724,7 +724,7 @@ export function ThreatModelStudio({
                 </div>
               </div>
 
-              {/* Image Upload Zone â€” optional, session-only */}
+              {/* Image Upload Zone -- optional, session-only */}
               <ImageUploadZone
                 images={images}
                 isFull={isFull}
@@ -776,7 +776,7 @@ export function ThreatModelStudio({
                   {loading === "threats" ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Analyzingâ€¦
+                      Analyzing...
                     </>
                   ) : (
                     <>
@@ -1184,10 +1184,10 @@ function ThreatCard({
                     id={`control-${threat.id}`}
                     value={currentControl}
                     onChange={(e) => onCurrentControlChange(e.target.value)}
-                    placeholder={`Describe existing controls in your organization for ${threat.id}â€¦ e.g. "MFA enforced on all admin accounts via Azure AD Conditional Access"`}
+                    placeholder={`Describe existing controls in your organization for ${threat.id}... e.g. "MFA enforced on all admin accounts via Azure AD Conditional Access"`}
                     maxLength={500}
-                    rows={3}
-                    className="mt-2 w-full text-xs text-neutral-700 placeholder-neutral-400 bg-neutral-50 border border-neutral-200 rounded-lg p-3 resize-none focus:outline-none focus:ring-1 focus:ring-neutral-400"
+                    rows={6}
+                    className="mt-2 w-full text-xs text-neutral-700 placeholder-neutral-400 bg-neutral-50 border border-neutral-200 rounded-lg p-3 resize-y focus:outline-none focus:ring-1 focus:ring-neutral-400 min-h-[120px]"
                   />
                   <div className="flex justify-end mt-1">
                     <span className="text-[10px] text-neutral-400">{currentControl.length}/500</span>
@@ -1233,7 +1233,7 @@ function AttackTreeTab({
           <div>
             <h3 className="text-title text-neutral-900 mb-1">Attack Tree</h3>
             <p className="text-sm text-neutral-500">
-              Adversary goal decomposition â€” root goal flows down to leaf techniques.
+              Adversary goal decomposition - root goal flows down to leaf techniques.
             </p>
           </div>
           <ExportMenu
@@ -1308,7 +1308,7 @@ function TreeView({
         }`}
         style={{ paddingLeft: `${depth * 16}px` }}
       >
-        {depth > 0 && <span className="text-neutral-400 mr-2">â””â”€</span>}
+        {depth > 0 && <span className="text-neutral-400 mr-2">|--</span>}
         {node.goal}
       </div>
       {(node.subgoals || []).map((sg: AttackTreeNode, i: number) => (
@@ -1570,7 +1570,7 @@ function DfdTab({
               Data Flow Diagram
             </h3>
             <p className="text-sm text-neutral-500">
-              {result.components.length} components Â· {result.flows.length} data flows
+              {result.components.length} components · {result.flows.length} data flows
             </p>
           </div>
           <ExportMenu
@@ -1805,7 +1805,7 @@ function CopyMermaidBar({ source }: { source: string }) {
   const copy = async () => {
     await navigator.clipboard.writeText(source);
     setCopied(true);
-    toast.success("Mermaid source copied â€” paste into mermaid.live or draw.io");
+    toast.success("Mermaid source copied -- paste into mermaid.live or draw.io");
     setTimeout(() => setCopied(false), 2500);
   };
   return (
@@ -1817,7 +1817,7 @@ function CopyMermaidBar({ source }: { source: string }) {
             Mermaid diagram ready
           </p>
           <p className="text-xs text-neutral-500">
-            Paste into mermaid.live, draw.io (Arrange â†’ Insert â†’ Advanced â†’ Mermaid), or any Markdown editor.
+            Paste into mermaid.live, draw.io (Arrange -&gt; Insert -&gt; Advanced -&gt; Mermaid), or any Markdown editor.
           </p>
         </div>
       </div>
@@ -1838,7 +1838,7 @@ function LoadingBlock({ label }: { label: string }) {
     <Card className="p-12 apple-card">
       <div className="flex flex-col items-center justify-center text-center">
         <Loader2 className="w-8 h-8 animate-spin text-neutral-900 mb-4" />
-        <p className="text-sm font-medium text-neutral-900">{label}â€¦</p>
+        <p className="text-sm font-medium text-neutral-900">{label}...</p>
         <p className="text-xs text-neutral-500 mt-1">
           The AI agent is reasoning through your application.
         </p>
@@ -1907,7 +1907,7 @@ function ExportMenu({
       kind: "xlsx",
       fmt: "Excel",
       label: "Excel",
-      sub: ".xlsx Â· multi-sheet workbook",
+      sub: ".xlsx - single STRIDE sheet",
       bundle: formats.xlsx.bundle,
       filename: formats.xlsx.filename,
     });
@@ -1916,7 +1916,7 @@ function ExportMenu({
       kind: "text",
       fmt: "Markdown",
       label: "Markdown",
-      sub: ".md Â· formatted table",
+      sub: ".md - formatted table",
       content: formats.markdown.content,
       filename: formats.markdown.filename,
       mime: "text/markdown",
@@ -1926,7 +1926,7 @@ function ExportMenu({
       kind: "text",
       fmt: "CSV",
       label: "CSV",
-      sub: ".csv Â· spreadsheet-ready",
+      sub: ".csv - spreadsheet-ready",
       content: formats.csv.content,
       filename: formats.csv.filename,
       mime: "text/csv",
@@ -1936,7 +1936,7 @@ function ExportMenu({
       kind: "text",
       fmt: "JSON",
       label: "JSON",
-      sub: ".json Â· structured",
+      sub: ".json - structured",
       content: formats.json.content,
       filename: formats.json.filename,
       mime: "application/json",
@@ -1946,7 +1946,7 @@ function ExportMenu({
       kind: "text",
       fmt: "Mermaid",
       label: "Mermaid",
-      sub: ".mmd Â· draw.io / mermaid.live",
+      sub: ".mmd - draw.io / mermaid.live",
       content: formats.mermaid.content,
       filename: formats.mermaid.filename,
       mime: "text/plain",
@@ -1956,7 +1956,7 @@ function ExportMenu({
       kind: "text",
       fmt: "Text",
       label: "Text",
-      sub: ".txt Â· plain",
+      sub: ".txt - plain text",
       content: formats.text.content,
       filename: formats.text.filename,
       mime: "text/plain",
@@ -2049,7 +2049,7 @@ function ImageUploadZone({
         <Label className="text-xs text-neutral-500 flex items-center gap-1.5">
           <ImagePlus className="w-3.5 h-3.5" />
           Architecture diagrams
-          <span className="text-neutral-400 font-normal">(optional Â· up to 5 Â· PNG/JPEG/WebP Â· max 4 MB each)</span>
+          <span className="text-neutral-400 font-normal">(optional &middot; up to 5 &middot; PNG/JPEG/WebP &middot; max 4 MB each)</span>
         </Label>
         {images.length > 0 && (
           <button
@@ -2080,7 +2080,7 @@ function ImageUploadZone({
             Drag &amp; drop diagrams here, or{" "}
             <span className="font-medium text-neutral-700">click to browse</span>
             <br />
-            <span className="text-neutral-400">PNG Â· JPEG Â· WebP Â· max 4 MB each Â· up to 5 images</span>
+            <span className="text-neutral-400">PNG &middot; JPEG &middot; WebP &middot; max 4 MB each &middot; up to 5 images</span>
           </p>
           <input
             ref={inputRef}
