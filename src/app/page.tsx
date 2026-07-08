@@ -35,11 +35,9 @@ export default function Page() {
   );
 }
 
-function providerLabel(provider: "groq" | "gemini", model: string): string {
-  const list = PROVIDER_MODELS[provider];
-  const found = list.find((m) => m.id === model);
-  const provName = provider === "groq" ? "Groq" : "Gemini";
-  return found ? `${provName} · ${found.label}` : provName;
+function providerLabel(_provider: string, model: string): string {
+  const found = PROVIDER_MODELS.openai.find((m) => m.id === model);
+  return found ? `OpenAI · ${found.label}` : "OpenAI";
 }
 
 /* ----------------- NavBar ----------------- */

@@ -19,9 +19,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Eye, EyeOff, Zap, Check, ExternalLink, Loader2, AlertTriangle } from "lucide-react";
+import { Eye, EyeOff, Zap, Check, Loader2, AlertTriangle, ShieldCheck } from "lucide-react";
 import {
   type Provider,
   type LlmConfig,
@@ -40,48 +39,39 @@ export function ApiConfigDialog({
   current: LlmConfig | null;
   onSave: (provider: Provider, apiKey: string, model?: string) => void;
 }) {
-  const [provider, setProvider] = useState<Provider>(
-    current?.provider ?? "groq"
-  );
-  const [apiKey, setApiKey] = useState(current?.apiKey ?? "");
-  const [model, setModel] = useState(
-    current?.model ?? DEFAULT_MODEL[current?.provider ?? "groq"]
-  );
+  const provider: Provider = "openai";
+  const [apiKey, setApiKey] = useState("");
+  const [model, setModel] = useState(DEFAULT_MODEL.openai);
   const [showKey, setShowKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<
-    { ok: boolean; message: string; models?: string[] } | null
+    { ok: boolean; message: string } | null
   >(null);
 
-  // Re-sync when the dialog opens with the current config.
+  // Re-sync when dialog opens — pre-fill model if already configured this session.
+  // We intentionally do NOT pre-fill the API key: the user must re-enter it
+  // each time the dialog opens (session-memory model — no persistence).
   useEffect(() => {
     if (open) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setProvider(current?.provider ?? "groq");
-      setApiKey(current?.apiKey ?? "");
-      setModel(current?.model ?? DEFAULT_MODEL[current?.provider ?? "groq"]);
+      setApiKey("");          // always blank — key is never persisted
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setModel(current?.model ?? DEFAULT_MODEL.openai);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setTestResult(null);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setShowKey(false);
     }
   }, [open, current]);
 
-
-  // When the provider switches, reset the model to that provider's default.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setModel(DEFAULT_MODEL[provider]);
-    setTestResult(null);
-  }, [provider]);
-
   const handleSave = () => {
     if (!apiKey.trim()) {
-      toast.error("Please enter your API key.");
+      toast.error("Please enter your OpenAI API key.");
       return;
     }
     onSave(provider, apiKey.trim(), model);
     toast.success(
-      `Connected to ${provider === "groq" ? "Groq" : "Google Gemini"} · ${
-        PROVIDER_MODELS[provider].find((m) => m.id === model)?.label ?? model
-      }`
+      `Connected · ${PROVIDER_MODELS.openai.find((m) => m.id === model)?.label ?? model}`
     );
     onOpenChange(false);
   };
@@ -105,22 +95,22 @@ export function ApiConfigDialog({
       setTestResult({
         ok: !!data.ok,
         message: data.ok ? data.message : data.error,
-        models: data.models,
       });
       if (data.ok) {
         toast.success("Connection successful");
       } else {
         toast.error(data.error || "Connection failed");
       }
-    } catch (e: any) {
-      setTestResult({ ok: false, message: e?.message ?? "Network error" });
-      toast.error(e?.message ?? "Network error");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Network error";
+      setTestResult({ ok: false, message: msg });
+      toast.error(msg);
     } finally {
       setTesting(false);
     }
   };
 
-  const models = PROVIDER_MODELS[provider];
+  const models = PROVIDER_MODELS.openai;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -128,43 +118,23 @@ export function ApiConfigDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg font-semibold">
             <Zap className="w-4 h-4 text-neutral-900" />
-            LLM API Configuration
+            OpenAI API Configuration
           </DialogTitle>
           <DialogDescription className="text-sm text-neutral-500">
-            Choose a free-tier provider and paste your API key. The key is stored
-            in your browser only and sent directly to the provider — never to any
-            third party.
+            Enter your OpenAI API key to connect. Your key is held in session
+            memory only — it is never saved to disk, browser storage, or any
+            server. It will be cleared when you close or refresh the tab.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-5 py-2">
-          {/* Provider tabs */}
-          <div className="space-y-2">
-            <Label className="text-xs text-neutral-500">PROVIDER</Label>
-            <Tabs
-              value={provider}
-              onValueChange={(v) => setProvider(v as Provider)}
-            >
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="groq">Groq</TabsTrigger>
-                <TabsTrigger value="gemini">Google Gemini</TabsTrigger>
-              </TabsList>
-            </Tabs>
-            <a
-              href={
-                provider === "groq"
-                  ? "https://console.groq.com/keys"
-                  : "https://aistudio.google.com/apikey"
-              }
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-900 transition-colors"
-            >
-              {provider === "groq"
-                ? "Get a free Groq API key"
-                : "Get a free Gemini API key"}
-              <ExternalLink className="w-3 h-3" />
-            </a>
+          {/* Security badge */}
+          <div className="flex items-center gap-2 p-3 rounded-xl bg-neutral-50 border border-neutral-200">
+            <ShieldCheck className="w-4 h-4 text-neutral-600 flex-shrink-0" />
+            <p className="text-xs text-neutral-600 leading-relaxed">
+              <span className="font-semibold">Zero persistence.</span> Key lives in
+              session memory only. Cleared on refresh. Never logged or stored.
+            </p>
           </div>
 
           {/* API key */}
@@ -178,12 +148,14 @@ export function ApiConfigDialog({
                 type={showKey ? "text" : "password"}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder={
-                  provider === "groq" ? "gsk_..." : "AIza..."
-                }
+                placeholder="sk-..."
                 className="h-11 rounded-xl pr-10 font-mono text-sm"
                 autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
                 spellCheck={false}
+                data-1p-ignore       // disable 1Password autofill
+                data-lpignore="true" // disable LastPass autofill
               />
               <button
                 type="button"
@@ -235,15 +207,7 @@ export function ApiConfigDialog({
             ) : (
               <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
             )}
-            <div className="min-w-0">
-              <p className="leading-relaxed">{testResult.message}</p>
-              {testResult.models && testResult.models.length > 0 && (
-                <p className="mt-1 text-[10px] opacity-70 font-mono truncate">
-                  Available: {testResult.models.slice(0, 5).join(", ")}
-                  {testResult.models.length > 5 ? "…" : ""}
-                </p>
-              )}
-            </div>
+            <p className="leading-relaxed">{testResult.message}</p>
           </div>
         )}
 

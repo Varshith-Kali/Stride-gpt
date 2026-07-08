@@ -6,15 +6,20 @@ export const runtime = "nodejs";
 export const maxDuration = 30;
 
 /**
- * Tests the user's API key by calling the provider's lightweight endpoint:
- *  - Groq:   GET /openai/v1/models (returns 200 + model list when valid)
- *  - Gemini: GET /v1beta/models?key=... (returns 200 + model list when valid)
+ * Tests the user's OpenAI API key by sending a minimal request to the
+ * OpenAI Responses API (POST /v1/responses) with the smallest possible input.
  *
- * Distinguishes between:
- *  - geo-block (Groq Cloudflare 403, or Gemini "User location is not supported")
- *  - invalid key (401, or Gemini 400 "API key not valid")
- *  - rate limited (429)
- *  - success (200 + model list)
+ * Why /v1/responses instead of /v1/models?
+ * - The user's internal model ("gpt-5.5") may not appear in the public
+ *   /v1/models list, so querying it would always return "model not found".
+ * - A minimal Responses call with max_output_tokens=1 validates:
+ *     (a) the API key is valid and authorized
+ *     (b) the model is accessible to this key
+ *   while consuming essentially no tokens.
+ *
+ * Security:
+ * - API key travels only in the Authorization header of this server-side fetch.
+ * - It is never returned to the client, logged, or stored.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -23,129 +28,99 @@ export async function POST(req: NextRequest) {
     }>(req);
     if (!parsed.ok) return parsed.error;
 
-    // readJsonRequest already validates data.config against the allowlist
-    // and returns it typed. If the client sent a config that didn't validate,
-    // config will be null here.
     let { config } = parsed;
     if (!config) {
-      // The dialog sends { config: {...} }. If validateConfig rejected it
-      // (e.g. model not in allowlist), fall back to the provider's default
-      // model so the key test can still run. This is safe because we only
-      // use the model for the test endpoint, not for generation.
       const rawConfig = (parsed.data as any)?.config;
       if (
-        (rawConfig?.provider === "groq" || rawConfig?.provider === "gemini") &&
+        rawConfig?.provider === "openai" &&
         typeof rawConfig?.apiKey === "string" &&
         rawConfig.apiKey.trim().length >= 10
       ) {
-        const provider = rawConfig.provider as "groq" | "gemini";
         config = {
-          provider,
+          provider: "openai",
           apiKey: rawConfig.apiKey.trim(),
-          model: DEFAULT_MODEL[provider],
+          model: DEFAULT_MODEL.openai,
         };
       }
     }
+
     if (!config) {
       return Response.json(
         {
           ok: false,
-          error:
-            "Invalid config. Provider must be 'groq' or 'gemini' with a valid API key.",
+          error: "Invalid config. Provider must be 'openai' with a valid API key.",
         },
         { status: 200 }
       );
     }
 
-    let url: string;
-    const headers: Record<string, string> = {};
-    if (config.provider === "groq") {
-      url = "https://api.groq.com/openai/v1/models";
-      headers["Authorization"] = `Bearer ${config.apiKey}`;
-    } else {
-      url = `https://generativelanguage.googleapis.com/v1beta/models?key=${config.apiKey}`;
-    }
-
+    // Minimal test call to OpenAI Responses API — 1 output token max.
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);
     let res: Response;
     try {
-      res = await fetch(url, { method: "GET", headers, signal: controller.signal });
-    } catch (e: any) {
+      res = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: config.model,
+          input: [{ role: "user", content: "ping" }],
+          max_output_tokens: 1,
+        }),
+        signal: controller.signal,
+      });
+    } catch (e: unknown) {
       clearTimeout(timer);
       return Response.json(
         {
           ok: false,
-          error: `Network error reaching ${config.provider}: ${e?.message ?? "unknown"}`,
+          error: `Network error reaching OpenAI: ${e instanceof Error ? e.message : "unknown"}`,
         },
         { status: 200 }
       );
     }
     clearTimeout(timer);
 
-    const text = await res.text().catch(() => "");
-
-    let models: string[] = [];
-    try {
-      const j = JSON.parse(text);
-      if (Array.isArray(j?.data)) {
-        models = j.data.map((m: any) => m.id).filter(Boolean).slice(0, 12);
-      } else if (Array.isArray(j?.models)) {
-        models = j.models.map((m: any) => m.name || m.id).filter(Boolean).slice(0, 12);
-      }
-    } catch {
-      /* not json */
-    }
-
     if (res.ok) {
-      const provName = config.provider === "groq" ? "Groq" : "Google Gemini";
       return Response.json({
         ok: true,
-        message: `Connected to ${provName} successfully. Key is valid.`,
-        models,
+        message: `Connected to OpenAI successfully. Model "${config.model}" is accessible.`,
       });
     }
 
-    // Groq geo-block: Cloudflare 403 with tiny "Forbidden" body
-    if (
-      config.provider === "groq" &&
-      res.status === 403 &&
-      (text.includes("Forbidden") || text.length < 60)
-    ) {
+    const text = await res.text().catch(() => "");
+
+    // 401 — invalid or revoked key
+    if (res.status === 401) {
       return Response.json({
         ok: false,
-        error:
-          "Groq is blocking requests from this server's region (Cloudflare 403). Your API key is valid — this is a geo-block. Switch to the Google Gemini provider (or vice versa if Gemini is blocked).",
+        error: "Invalid API key (401). Verify the key is correct and hasn't been revoked.",
         status: res.status,
       });
     }
 
-    // Gemini geo-block: 400 "User location is not supported"
-    if (
-      config.provider === "gemini" &&
-      res.status === 400 &&
-      text.includes("User location is not supported")
-    ) {
+    // 403 — insufficient permissions for this model
+    if (res.status === 403) {
       return Response.json({
         ok: false,
-        error:
-          "Google Gemini is not available in this server's region. Your API key is valid — this is a geo-block. Switch to the Groq provider (or vice versa if Groq is blocked).",
+        error: `Access denied (403). Your API key may not have permission to access "${config.model}". Check your OpenAI organization settings.`,
         status: res.status,
       });
     }
 
-    // Invalid key
-    if (
-      res.status === 401 ||
-      (res.status === 400 && text.includes("API key not valid"))
-    ) {
+    // 404 — model not found (likely internal model not yet provisioned)
+    if (res.status === 404) {
       return Response.json({
         ok: false,
-        error: `Invalid API key (${res.status}). Check that you copied the full key.`,
+        error: `Model "${config.model}" not found (404). Ensure this model is provisioned for your API key.`,
         status: res.status,
       });
     }
 
+    // 429 — rate limit or quota exceeded
     if (res.status === 429) {
       return Response.json({
         ok: false,
@@ -154,9 +129,10 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // Generic error
     return Response.json({
       ok: false,
-      error: `Provider returned ${res.status}: ${text.slice(0, 200) || res.statusText}`,
+      error: `OpenAI returned ${res.status}: ${text.slice(0, 200) || res.statusText}`,
       status: res.status,
     });
   } catch (e) {

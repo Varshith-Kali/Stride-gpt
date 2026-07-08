@@ -276,182 +276,141 @@ async function fetchWithTimeout(
 }
 
 /**
- * Classify an HTTP error response from a provider into an LlmError kind.
+ * Classify an OpenAI HTTP error response into a typed LlmError.
+ * Reference: https://platform.openai.com/docs/guides/error-codes
  */
-function classifyHttpError(
-  provider: "groq" | "gemini",
-  status: number,
-  body: string
-): LlmError {
-  // Groq geo-block: Cloudflare 403 with tiny "Forbidden" body
-  if (
-    provider === "groq" &&
-    status === 403 &&
-    (body.includes("Forbidden") || body.length < 60)
-  ) {
-    return new LlmError(
-      "geo-block",
-      "Groq is blocking requests from this server's region (Cloudflare 403). Your API key is valid, but Groq doesn't serve this region. Open Settings and switch to the Google Gemini provider.",
-      status
-    );
-  }
-  // Gemini geo-block: 400 with "User location is not supported"
-  if (
-    provider === "gemini" &&
-    status === 400 &&
-    body.includes("User location is not supported")
-  ) {
-    return new LlmError(
-      "geo-block",
-      "Google Gemini is not available in this server's region. Your API key is valid, but the Gemini free tier isn't offered here. Open Settings and switch to the Groq provider.",
-      status
-    );
-  }
-  // Invalid key (both providers)
-  if (status === 401 || (status === 400 && body.includes("API key not valid"))) {
+function classifyOpenAIError(status: number, body: string): LlmError {
+  // 401 — invalid or expired API key
+  if (status === 401) {
     return new LlmError(
       "invalid-key",
-      `Invalid API key (${status}). Check that you copied the full key and that it hasn't been revoked.`,
+      "Invalid OpenAI API key (401). Verify the key is correct and hasn't been revoked.",
       status
     );
   }
-  // Rate limit
+  // 403 — org-level restriction or key scope issue
+  if (status === 403) {
+    return new LlmError(
+      "invalid-key",
+      "Access denied (403). Your API key may lack permission to access this model. Check your OpenAI organization settings.",
+      status
+    );
+  }
+  // 429 — rate limit or quota
   if (status === 429) {
     return new LlmError(
       "rate-limit",
-      "Rate limited (429). The free-tier quota is exhausted — wait a moment and try again.",
+      "Rate limited (429). You have exceeded your OpenAI quota or request rate. Wait a moment and try again.",
+      status
+    );
+  }
+  // 400 — bad request (malformed body, model not found, content filter)
+  if (status === 400) {
+    if (body.includes("content_filter") || body.includes("content filter")) {
+      return new LlmError(
+        "provider",
+        "OpenAI content filter blocked this request. Try rephrasing the application description.",
+        status
+      );
+    }
+    return new LlmError(
+      "provider",
+      `OpenAI rejected the request (400): ${body.slice(0, 200) || "bad request"}`,
+      status
+    );
+  }
+  // 5xx — server-side OpenAI error
+  if (status >= 500) {
+    return new LlmError(
+      "provider",
+      `OpenAI server error (${status}). The service may be temporarily unavailable — try again shortly.`,
       status
     );
   }
   return new LlmError(
     "provider",
-    `${provider === "groq" ? "Groq" : "Gemini"} API error ${status}: ${body.slice(0, 200) || "unknown"}`,
+    `OpenAI API error ${status}: ${body.slice(0, 200) || "unknown error"}`,
     status
   );
 }
 
 /**
- * Call the user-configured LLM provider (Groq or Gemini) directly.
- * `config` carries the provider, API key, and model selected in the UI.
- * Throws LlmError on any failure.
+ * Call the OpenAI Responses API.
+ *
+ * Endpoint: POST https://api.openai.com/v1/responses
+ * Auth:     Authorization: Bearer <apiKey>
+ * Docs:     https://platform.openai.com/docs/api-reference/responses
+ *
+ * The Responses API accepts an `input` array of message objects and returns
+ * `output[0].content[0].text` as the model's response.
+ * The system instruction is sent as the first message with role "system".
+ *
+ * Security:
+ * - API key travels only in the encrypted Authorization header of this
+ *   server-side fetch. It is never logged, cached, or returned to the client.
+ * - The request body is validated and sanitized upstream before reaching here.
  */
 async function callLLM(
   config: LlmConfig,
   messages: { role: "system" | "user" | "assistant"; content: string }[]
 ): Promise<string> {
-  const fullMessages = [
+  // Prepend the system prompt as the first message in the input array.
+  const input = [
     { role: "system" as const, content: SYSTEM_PROMPT },
     ...messages,
   ];
 
-  if (config.provider === "groq") {
-    return callGroq(config, fullMessages);
-  }
-  return callGemini(config, fullMessages);
-}
-
-/** Groq chat completion (OpenAI-compatible endpoint). */
-async function callGroq(
-  config: LlmConfig,
-  messages: { role: string; content: string }[]
-): Promise<string> {
   let res: Response;
   try {
     res = await fetchWithTimeout(
-      "https://api.groq.com/openai/v1/chat/completions",
+      "https://api.openai.com/v1/responses",
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${config.apiKey}`,
           "Content-Type": "application/json",
+          Authorization: `Bearer ${config.apiKey}`,
         },
         body: JSON.stringify({
           model: config.model,
-          messages,
-          temperature: 0.7,
-          max_tokens: 8000,
+          input,
         }),
       }
     );
   } catch (e) {
     if (e instanceof LlmError) throw e;
-    throw new LlmError("network", `Failed to reach Groq: ${(e as Error).message}`);
-  }
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    throw classifyHttpError("groq", res.status, errText);
-  }
-
-  const data = await res.json().catch(() => null);
-  const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== "string" || content.length === 0) {
-    throw new LlmError("provider", "Groq returned an empty response.");
-  }
-  return content;
-}
-
-/** Google Gemini generateContent endpoint. */
-async function callGemini(
-  config: LlmConfig,
-  messages: { role: string; content: string }[]
-): Promise<string> {
-  // Gemini separates system instruction from contents.
-  const system = messages.find((m) => m.role === "system");
-  const contents = messages
-    .filter((m) => m.role !== "system")
-    .map((m) => ({
-      role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: m.content }],
-    }));
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent?key=${config.apiKey}`;
-  let res: Response;
-  try {
-    res = await fetchWithTimeout(
-      url,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents,
-          systemInstruction: system ? { parts: [{ text: system.content }] } : undefined,
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 8192,
-            responseMimeType: "text/plain",
-          },
-        }),
-      }
+    throw new LlmError(
+      "network",
+      `Failed to reach OpenAI: ${(e as Error).message}`
     );
-  } catch (e) {
-    if (e instanceof LlmError) throw e;
-    throw new LlmError("network", `Failed to reach Gemini: ${(e as Error).message}`);
   }
 
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
-    throw classifyHttpError("gemini", res.status, errText);
+    throw classifyOpenAIError(res.status, errText);
   }
 
   const data = await res.json().catch(() => null);
-  // Gemini may return a promptFeedback blockReason instead of candidates
-  // if the prompt was blocked — surface that explicitly.
-  if (!data?.candidates?.length) {
-    const blockReason = data?.promptFeedback?.blockReason;
+
+  // OpenAI Responses API: output[0].content[0].text
+  const text = data?.output?.[0]?.content?.[0]?.text;
+  if (typeof text === "string" && text.length > 0) return text;
+
+  // Fallback: some model variants return output[0].content as a plain string
+  const textAlt = data?.output?.[0]?.content;
+  if (typeof textAlt === "string" && textAlt.length > 0) return textAlt;
+
+  // Surface content filter refusals
+  const refusal = data?.output?.[0]?.content?.[0]?.refusal;
+  if (refusal) {
     throw new LlmError(
       "provider",
-      blockReason
-        ? `Gemini blocked the prompt (${blockReason}). Try rephrasing the application description.`
-        : "Gemini returned no candidates. The response was empty."
+      `OpenAI refused to generate a response: ${refusal}`
     );
   }
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (typeof text !== "string" || text.length === 0) {
-    throw new LlmError("provider", "Gemini returned an empty response.");
-  }
-  return text;
+
+  throw new LlmError("provider", "OpenAI returned an empty or unrecognized response.");
 }
+
 
 export async function generateThreatModel(
   config: LlmConfig,

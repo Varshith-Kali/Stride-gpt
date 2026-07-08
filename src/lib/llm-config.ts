@@ -1,16 +1,16 @@
 /**
- * LLM provider configuration for STRIDE GPT.
+ * LLM provider configuration — OpenAI only.
  *
- * The app calls Groq or Google Gemini directly from server-side API routes
- * using the user-provided API key. No third-party SDK (z.ai, OpenRouter, etc.)
- * is used for content generation.
+ * This application calls the OpenAI Responses API directly from server-side
+ * API routes using the user-provided API key. The key is held in session
+ * memory only (never persisted) and travels exclusively within the encrypted
+ * HTTPS request body.
  *
- * Supported providers:
- *   - groq   → OpenAI-compatible endpoint at api.groq.com
- *   - gemini → Google generateContent at generativelanguage.googleapis.com
+ * Endpoint: POST https://api.openai.com/v1/responses
+ * Auth:     Authorization: Bearer <key>
  */
 
-export type Provider = "groq" | "gemini";
+export type Provider = "openai";
 
 export interface LlmConfig {
   provider: Provider;
@@ -25,100 +25,55 @@ export interface ProviderModel {
 }
 
 export const PROVIDER_MODELS: Record<Provider, ProviderModel[]> = {
-  groq: [
+  openai: [
     {
-      id: "llama-3.3-70b-versatile",
-      label: "Llama 3.3 70B Versatile",
-      note: "Best reasoning · Groq free tier",
+      id: "gpt-5.5",
+      label: "GPT-5.5",
+      note: "Latest · Internal enterprise model",
     },
     {
-      id: "llama-3.1-8b-instant",
-      label: "Llama 3.1 8B Instant",
-      note: "Fastest · Groq free tier",
+      id: "gpt-4.1",
+      label: "GPT-4.1",
+      note: "High capability · Enterprise",
     },
     {
-      id: "deepseek-r1-distill-llama-70b",
-      label: "DeepSeek R1 Distill Llama 70B",
-      note: "Reasoning model · Groq free tier",
+      id: "gpt-4.1-mini",
+      label: "GPT-4.1 Mini",
+      note: "Fast + efficient · Enterprise",
     },
     {
-      id: "qwen-2.5-32b",
-      label: "Qwen 2.5 32B",
-      note: "Strong analysis · Groq free tier",
+      id: "gpt-4o",
+      label: "GPT-4o",
+      note: "Multimodal · OpenAI standard",
     },
     {
-      id: "qwen/qwen3-32b",
-      label: "Qwen 3 32B",
-      note: "Latest Qwen · Groq free tier",
+      id: "gpt-4o-mini",
+      label: "GPT-4o Mini",
+      note: "Lightweight · OpenAI standard",
     },
     {
-      id: "moonshotai/kimi-k2-instruct",
-      label: "Kimi K2 Instruct",
-      note: "Long context · Groq free tier",
+      id: "o3",
+      label: "o3",
+      note: "Advanced reasoning · OpenAI",
     },
     {
-      id: "openai/gpt-oss-20b",
-      label: "GPT-OSS 20B",
-      note: "OpenAI open weights · Groq free tier",
-    },
-    {
-      id: "gemma2-9b-it",
-      label: "Gemma 2 9B IT",
-      note: "Lightweight · Groq free tier",
-    },
-  ],
-  gemini: [
-    {
-      id: "gemini-2.5-flash",
-      label: "Gemini 2.5 Flash",
-      note: "Fast + capable · Gemini free tier",
-    },
-    {
-      id: "gemini-2.5-pro",
-      label: "Gemini 2.5 Pro",
-      note: "Most capable · Gemini free tier",
-    },
-    {
-      id: "gemini-2.5-flash-lite",
-      label: "Gemini 2.5 Flash Lite",
-      note: "Lowest latency · Gemini free tier",
-    },
-    {
-      id: "gemini-2.0-flash",
-      label: "Gemini 2.0 Flash",
-      note: "Stable · Gemini free tier",
-    },
-    {
-      id: "gemini-2.0-flash-thinking-exp",
-      label: "Gemini 2.0 Flash Thinking",
-      note: "Reasoning · experimental",
-    },
-    {
-      id: "gemini-1.5-flash",
-      label: "Gemini 1.5 Flash",
-      note: "Legacy stable · Gemini free tier",
-    },
-    {
-      id: "gemini-1.5-pro",
-      label: "Gemini 1.5 Pro",
-      note: "Legacy large · Gemini free tier",
+      id: "o4-mini",
+      label: "o4-mini",
+      note: "Reasoning · fast + efficient",
     },
   ],
 };
 
 export const DEFAULT_MODEL: Record<Provider, string> = {
-  groq: "llama-3.3-70b-versatile",
-  gemini: "gemini-2.5-flash",
+  openai: "gpt-5.5",
 };
 
 /**
- * Allowlist of valid model IDs per provider. Incoming configs are validated
- * against this so a compromised client can't make the server call arbitrary
- * model strings (which could be used for prompt injection via model name).
+ * Allowlist of valid model IDs. Validated server-side so a compromised client
+ * cannot make the server call arbitrary model strings.
  */
 export const ALLOWED_MODELS: Record<Provider, ReadonlySet<string>> = {
-  groq: new Set(PROVIDER_MODELS.groq.map((m) => m.id)),
-  gemini: new Set(PROVIDER_MODELS.gemini.map((m) => m.id)),
+  openai: new Set(PROVIDER_MODELS.openai.map((m) => m.id)),
 };
 
 export function isConfigured(c: LlmConfig | null | undefined): c is LlmConfig {
@@ -130,12 +85,10 @@ export function isConfigured(c: LlmConfig | null | undefined): c is LlmConfig {
  * config if valid, or null. Rejects unknown providers, models not in the
  * allowlist, or malformed API keys.
  */
-export function validateConfig(
-  raw: unknown
-): LlmConfig | null {
+export function validateConfig(raw: unknown): LlmConfig | null {
   if (!raw || typeof raw !== "object") return null;
   const c = raw as Partial<LlmConfig>;
-  if (c.provider !== "groq" && c.provider !== "gemini") return null;
+  if (c.provider !== "openai") return null;
   if (typeof c.apiKey !== "string" || c.apiKey.trim().length < 10) return null;
   if (typeof c.model !== "string") return null;
   if (!ALLOWED_MODELS[c.provider].has(c.model)) return null;

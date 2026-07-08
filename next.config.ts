@@ -35,7 +35,7 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "font-src 'self' https://fonts.gstatic.com",
       "img-src 'self' data: blob:",
-      "connect-src 'self' https://api.groq.com https://generativelanguage.googleapis.com",
+      "connect-src 'self' https://api.openai.com",
       "frame-ancestors 'none'",
       "object-src 'none'",
       "base-uri 'self'",
