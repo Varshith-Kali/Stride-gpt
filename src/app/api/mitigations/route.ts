@@ -8,6 +8,7 @@ import {
 import {
   validateThreatModelInput,
   sanitizeThreats,
+  validateImages,
   LIMITS,
 } from "@/lib/validation";
 
@@ -19,6 +20,7 @@ export async function POST(req: NextRequest) {
     const parsed = await readJsonRequest<{
       input?: unknown;
       threats?: unknown;
+      images?: unknown;
     }>(req);
     if (!parsed.ok) return parsed.error;
 
@@ -47,7 +49,10 @@ export async function POST(req: NextRequest) {
     }
 
     const threats = sanitizeThreats(data.threats);
-    const result = await generateMitigations(config, input, threats);
+    // Optional multimodal images — session-only, never stored
+    const images = validateImages(data.images);
+
+    const result = await generateMitigations(config, input, threats, images.length > 0 ? images : undefined);
     return Response.json(result);
   } catch (e) {
     return handleError(e);

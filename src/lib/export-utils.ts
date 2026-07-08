@@ -15,8 +15,6 @@ import type {
   MitigationResult,
   DreadScore,
   DfdResult,
-  AttackTreeResult,
-  GherkinResult,
 } from "@/lib/stride-engine";
 
 export type ExportFormat = "markdown" | "csv" | "json" | "xlsx";
@@ -255,6 +253,21 @@ export function dfdToMarkdown(result: DfdResult): string {
 /* ------------------------------------------------------------------ */
 /* Attack Tree                                                         */
 /* ------------------------------------------------------------------ */
+/* Attack Tree (kept for Markdown export completeness)                 */
+/* ------------------------------------------------------------------ */
+
+/** Minimal local type — mirrors stride-engine's AttackTreeResult. */
+interface AttackTreeResult {
+  mermaid: string;
+  root: { goal: string; subgoals: AttackTreeNode[] };
+  narrative: string;
+}
+
+/** Minimal local type — mirrors stride-engine's GherkinResult. */
+interface GherkinResult {
+  feature: string;
+  scenarios: { title: string; given: string; when: string; then: string[] }[];
+}
 
 /** Recursive attack-tree node — mirrors the shape returned by stride-engine. */
 interface AttackTreeNode {
@@ -293,63 +306,6 @@ export function gherkinToText(result: GherkinResult): string {
     .join("\n\n");
   return `${result.feature}\n\n${scenarios}\n`;
 }
-
-/* ------------------------------------------------------------------ */
-/* Excel row helpers                                                   */
-/* ------------------------------------------------------------------ */
-
-const threatRows = (r: ThreatModelResult) =>
-  r.threats.map((t) => ({
-    ID: t.id,
-    "STRIDE Category": t.strideCategory,
-    Threat: t.threat,
-    Component: t.component,
-    Description: t.description,
-    "MITRE ATT&CK": (t.mitreAttack ?? []).join("; "),
-    Risk: t.risk,
-  }));
-
-const mitigationRows = (r: MitigationResult) =>
-  r.mitigations.map((m) => ({
-    Threat: m.threat,
-    Mitigation: m.mitigation,
-    Priority: m.priority,
-    "OWASP Reference": m.owaspReference ?? "",
-  }));
-
-const dreadRows = (scores: DreadScore[]) =>
-  scores.map((d) => ({
-    Threat: d.threat,
-    Damage: d.damage,
-    Reproducibility: d.reproducibility,
-    Exploitability: d.exploitability,
-    "Affected Users": d.affectedUsers,
-    Discoverability: d.discoverability,
-    Total: d.total,
-    Severity: d.severity,
-  }));
-
-const dfdComponentRows = (r: DfdResult) =>
-  r.components.map((c) => ({
-    Component: c.name,
-    Type: c.type,
-    "Trust Level": c.trustLevel,
-  }));
-
-const dfdFlowRows = (r: DfdResult) =>
-  r.flows.map((f) => ({
-    From: f.from,
-    To: f.to,
-    "Data Flow": f.description,
-  }));
-
-const gherkinRows = (r: GherkinResult) =>
-  r.scenarios.map((s) => ({
-    Scenario: s.title,
-    Given: s.given,
-    When: s.when,
-    Then: s.then.join("\n"),
-  }));
 
 /* ================================================================== */
 /* Minimal OOXML .xlsx writer — no external dependencies               */
@@ -562,10 +518,8 @@ function buildZip(entries: ZipEntry[]): Uint8Array {
 
 export interface ExcelBundle {
   threatModel?: ThreatModelResult;
-  mitigations?: MitigationResult;
-  dreadScores?: DreadScore[];
-  dfd?: DfdResult;
-  gherkin?: GherkinResult;
+  /** Per-threat current controls, keyed by threat ID. */
+  currentControls?: Record<string, string>;
 }
 
 /**
@@ -587,113 +541,35 @@ export interface ExcelBundle {
  * The Summary/Executive Summary sheet is intentionally removed;
  * that context belongs on the web page, not the spreadsheet.
  */
+/**
+ * Build a single-sheet .xlsx workbook — "STRIDE" sheet only.
+ *
+ * COLUMNS
+ * ───────────────────────────────────────────────────────────────────
+ * S.No | STRIDE Category | Threat Description | MITRE ATT&CK Mapping
+ * | Risk Level | Existing Controls
+ *
+ * "Existing Controls" is populated from the per-threat current-controls
+ * text the user typed into the UI. If no note was given for a threat
+ * the cell is left blank.
+ */
 export function buildExcelWorkbook(bundle: ExcelBundle): ArrayBuffer {
   const enc = new TextEncoder();
   const sheets: { name: string; rows: Record<string, unknown>[] }[] = [];
 
-  // ── Build lookup: all mitigations grouped by threat title ───────
-  const mitsByThreat = new Map<string, MitigationResult["mitigations"]>();
-  if (bundle.mitigations) {
-    for (const m of bundle.mitigations.mitigations) {
-      const key = m.threat.toLowerCase().trim();
-      if (!mitsByThreat.has(key)) mitsByThreat.set(key, []);
-      mitsByThreat.get(key)!.push(m);
-    }
-  }
-
-  // ── Build lookup: DREAD score by threat title ────────────────────
-  const dreadByThreat = new Map<string, DreadScore>();
-  const hasDread = (bundle.dreadScores?.length ?? 0) > 0;
-  if (hasDread) {
-    for (const d of bundle.dreadScores!) {
-      dreadByThreat.set(d.threat.toLowerCase().trim(), d);
-    }
-  }
-
-  // ── Sheet 1: flat unified threat table ──────────────────────────
-  if (bundle.threatModel) {
-    const rows: Record<string, unknown>[] = bundle.threatModel.threats.map((t) => {
-      const key  = t.threat.toLowerCase().trim();
-      const mits = mitsByThreat.get(key) ?? [];
-      const dread = dreadByThreat.get(key);
-
-      // Join multiple mitigations for the same threat with a separator
-      const recommendation = mits.map((m) => m.mitigation).join(" | ");
-      const priority       = [...new Set(mits.map((m) => m.priority).filter(Boolean))].join(", ");
-      const owasp          = [...new Set(mits.map((m) => m.owaspReference ?? "").filter(Boolean))].join(", ");
-
-      const row: Record<string, unknown> = {
-        "ID":                      t.id,
-        "STRIDE Category":         t.strideCategory,
-        "Component":               t.component,
-        "Finding / Issue":         t.threat,
-        "Description":             t.description,
-        "Risk":                    t.risk,
+  if (bundle.threatModel && bundle.threatModel.threats.length > 0) {
+    const controls = bundle.currentControls ?? {};
+    const rows: Record<string, unknown>[] = bundle.threatModel.threats.map(
+      (t, idx) => ({
+        "S.No":                     idx + 1,
+        "STRIDE Category":          t.strideCategory,
+        "Threat Description":       t.threat + (t.description ? "\n" + t.description : ""),
         "MITRE ATT\u0026CK Mapping": (t.mitreAttack ?? []).join("; "),
-        "Recommendation":          recommendation,
-        "Priority":                priority,
-        "OWASP Reference":         owasp,
-      };
-
-      // Append DREAD columns only when scores were generated
-      if (hasDread) {
-        row["Damage"]          = dread?.damage          ?? "";
-        row["Reproducibility"] = dread?.reproducibility ?? "";
-        row["Exploitability"]  = dread?.exploitability  ?? "";
-        row["Affected Users"]  = dread?.affectedUsers   ?? "";
-        row["Discoverability"] = dread?.discoverability ?? "";
-        row["DREAD Total"]     = dread?.total           ?? "";
-        row["DREAD Severity"]  = dread?.severity        ?? "";
-      }
-
-      return row;
-    });
-
-    sheets.push({ name: "STRIDE Threats", rows });
-  }
-
-  // ── Sheet 2: Hardening Checklist ────────────────────────────────
-  if (bundle.mitigations?.hardeningChecklist.length) {
-    sheets.push({
-      name: "Hardening Checklist",
-      rows: bundle.mitigations.hardeningChecklist.map((c, i) => ({
-        "#":                   i + 1,
-        "Hardening Checklist": c,
-      })),
-    });
-  }
-
-  // ── Sheet 3: Gherkin Tests ───────────────────────────────────────
-  if (bundle.gherkin) {
-    sheets.push({
-      name: "Gherkin Tests",
-      rows: bundle.gherkin.scenarios.map((s) => ({
-        "Scenario": s.title,
-        "Given":    s.given,
-        "When":     s.when,
-        "Then":     s.then.join("\n"),
-      })),
-    });
-  }
-
-  // ── Sheets 4 & 5: DFD ───────────────────────────────────────────
-  if (bundle.dfd) {
-    sheets.push({
-      name: "DFD Components",
-      rows: bundle.dfd.components.map((c) => ({
-        "Component":   c.name,
-        "Type":        c.type,
-        "Trust Level": c.trustLevel,
-      })),
-    });
-    sheets.push({
-      name: "DFD Flows",
-      rows: bundle.dfd.flows.map((f) => ({
-        "From":      f.from,
-        "To":        f.to,
-        "Data Flow": f.description,
-      })),
-    });
+        "Risk Level":               t.risk,
+        "Existing Controls":        controls[t.id] ?? "",
+      })
+    );
+    sheets.push({ name: "STRIDE", rows });
   }
 
   // ── Build SST and worksheet XMLs ─────────────────────────────────

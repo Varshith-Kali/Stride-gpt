@@ -1,14 +1,12 @@
-"use client";
+﻿"use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Shield,
-  TreePine,
   Wrench,
   Gauge,
   Workflow,
-  FileCheck2,
   Loader2,
   AlertCircle,
   Sparkles,
@@ -24,7 +22,6 @@ import {
   FileSpreadsheet,
   ImagePlus,
   X,
-  Lightbulb,
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
@@ -162,19 +159,6 @@ interface GherkinResult {
   scenarios: { title: string; given: string; when: string; then: string[] }[];
 }
 
-interface Recommendation {
-  threatIds: string[];
-  action: string;
-  steps: string[];
-  effort: "Low" | "Medium" | "High";
-  riskReduction: string;
-}
-
-interface RecommendationResult {
-  recommendations: Recommendation[];
-  executiveSummary: string;
-}
-
 const STRIDE_CATEGORIES = [
   {
     name: "Spoofing",
@@ -292,11 +276,9 @@ const EXAMPLE_APPS = [
 
 type TabId =
   | "threats"
-  | "attack-tree"
   | "mitigations"
   | "dread"
-  | "dfd"
-  | "gherkin";
+  | "dfd";
 
 const TABS: {
   id: TabId;
@@ -309,12 +291,6 @@ const TABS: {
     label: "Threat Model",
     icon: Shield,
     description: "STRIDE-categorized threats",
-  },
-  {
-    id: "attack-tree",
-    label: "Attack Tree",
-    icon: TreePine,
-    description: "Adversary goal decomposition",
   },
   {
     id: "mitigations",
@@ -333,12 +309,6 @@ const TABS: {
     label: "Data Flow",
     icon: Workflow,
     description: "Trust-boundary diagram",
-  },
-  {
-    id: "gherkin",
-    label: "Test Cases",
-    icon: FileCheck2,
-    description: "BDD security tests",
   },
 ];
 
@@ -374,20 +344,17 @@ export function ThreatModelStudio({
   const [hasMultipleTenants, setHasMultipleTenants] = useState(false);
 
   const [activeTab, setActiveTab] = useState<TabId>("threats");
-  const [loading, setLoading] = useState<TabId | "recommendations" | null>(null);
+  const [loading, setLoading] = useState<TabId | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [threatModel, setThreatModel] = useState<ThreatModelResult | null>(null);
-  const [attackTree, setAttackTree] = useState<AttackTreeResult | null>(null);
   const [mitigations, setMitigations] = useState<MitigationResult | null>(null);
   const [dreadScores, setDreadScores] = useState<DreadScore[] | null>(null);
   const [dfd, setDfd] = useState<DfdResult | null>(null);
-  const [gherkin, setGherkin] = useState<GherkinResult | null>(null);
-  const [recommendations, setRecommendations] = useState<RecommendationResult | null>(null);
-  // Per-threat justification text — keyed by threat ID. Session-only state.
-  const [justifications, setJustifications] = useState<Record<string, string>>({});
+  // Per-threat current controls â€” keyed by threat ID. Session-only state.
+  const [currentControls, setCurrentControls] = useState<Record<string, string>>({});
 
-  // Session-only image upload state — never persisted to any storage.
+  // Session-only image upload state â€” never persisted to any storage.
   const { images, addFiles, removeImage, clearAll: clearImages, isFull } = useImageUpload();
 
   const resultsRef = useRef<HTMLDivElement>(null);
@@ -447,7 +414,7 @@ export function ThreatModelStudio({
         body: JSON.stringify({
           config,
           input: buildInput(),
-          // Images are base64 data-URLs — zero server persistence
+          // Images are base64 data-URLs â€” zero server persistence
           images: images.length > 0
             ? images.map((img) => ({ mimeType: img.mimeType, dataUrl: img.dataUrl, name: img.name }))
             : undefined,
@@ -459,13 +426,11 @@ export function ThreatModelStudio({
       }
       const data: ThreatModelResult = await res.json();
       setThreatModel(data);
-      // Reset downstream artifacts and justifications on new threat model
-      setAttackTree(null);
+      // Reset downstream artifacts and current controls on new threat model
       setMitigations(null);
       setDreadScores(null);
-      setGherkin(null);
-      setRecommendations(null);
-      setJustifications({});
+      setDfd(null);
+      setCurrentControls({});
       toast.success(
         `Identified ${data.threats.length} threats across STRIDE categories`
       );
@@ -482,77 +447,6 @@ export function ThreatModelStudio({
     }
   }, [config, onOpenConfig, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants, images]);
 
-  const generateRecommendations = useCallback(async () => {
-    if (!requireConfig()) return;
-    if (!threatModel || threatModel.threats.length === 0) {
-      toast.error("Generate a threat model first.");
-      return;
-    }
-    setLoading("recommendations");
-    setError(null);
-    try {
-      const res = await fetch("/api/recommendations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          config,
-          threats: threatModel.threats,
-          justifications,
-          appInput: buildInput(),
-          images: images.length > 0
-            ? images.map((img) => ({ mimeType: img.mimeType, dataUrl: img.dataUrl, name: img.name }))
-            : undefined,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(err.error || "Failed to generate recommendations");
-      }
-      const data: RecommendationResult = await res.json();
-      setRecommendations(data);
-      toast.success(`Generated ${data.recommendations.length} prioritized recommendations`);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth" }), 200);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Unexpected error generating recommendations";
-      setError(msg);
-      toast.error(msg);
-    } finally {
-      setLoading(null);
-    }
-  }, [config, onOpenConfig, threatModel, justifications, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants, images]);
-
-  const generateAttackTree = useCallback(async () => {
-    if (!requireConfig()) return;
-    if (description.trim().length < 10) {
-      toast.error("Describe your application first.");
-      return;
-    }
-    setLoading("attack-tree");
-    setError(null);
-    setActiveTab("attack-tree");
-    try {
-      const res = await fetch("/api/attack-tree", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config, input: buildInput() }),
-      });
-      if (!res.ok) throw new Error("Failed to generate attack tree");
-      const data: AttackTreeResult = await res.json();
-      setAttackTree(data);
-      toast.success("Attack tree generated");
-      setTimeout(
-        () => resultsRef.current?.scrollIntoView({ behavior: "smooth" }),
-        200
-      );
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Unexpected error generating attack tree";
-      setError(msg);
-      toast.error(msg);
-    } finally {
-      setLoading(null);
-    }
-  }, [config, onOpenConfig, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants]);
-
   const generateMitigations = useCallback(async () => {
     if (!requireConfig()) return;
     if (!threatModel || threatModel.threats.length === 0) {
@@ -566,7 +460,14 @@ export function ThreatModelStudio({
       const res = await fetch("/api/mitigations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config, input: buildInput(), threats: threatModel.threats }),
+        body: JSON.stringify({
+          config,
+          input: buildInput(),
+          threats: threatModel.threats,
+          images: images.length > 0
+            ? images.map((img) => ({ mimeType: img.mimeType, dataUrl: img.dataUrl, name: img.name }))
+            : undefined,
+        }),
       });
       if (!res.ok) throw new Error("Failed to generate mitigations");
       const data: MitigationResult = await res.json();
@@ -583,7 +484,7 @@ export function ThreatModelStudio({
     } finally {
       setLoading(null);
     }
-  }, [config, onOpenConfig, threatModel, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants]);
+  }, [config, onOpenConfig, threatModel, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants, images]);
 
   const generateDread = useCallback(async () => {
     if (!requireConfig()) return;
@@ -598,7 +499,14 @@ export function ThreatModelStudio({
       const res = await fetch("/api/dread", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config, threats: threatModel.threats }),
+        body: JSON.stringify({
+          config,
+          input: buildInput(),
+          threats: threatModel.threats,
+          images: images.length > 0
+            ? images.map((img) => ({ mimeType: img.mimeType, dataUrl: img.dataUrl, name: img.name }))
+            : undefined,
+        }),
       });
       if (!res.ok) throw new Error("Failed to generate DREAD scores");
       const data: DreadScore[] = await res.json();
@@ -615,7 +523,7 @@ export function ThreatModelStudio({
     } finally {
       setLoading(null);
     }
-  }, [config, onOpenConfig, threatModel]);
+  }, [config, onOpenConfig, threatModel, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants, images]);
 
   const generateDfd = useCallback(async () => {
     if (!requireConfig()) return;
@@ -630,7 +538,13 @@ export function ThreatModelStudio({
       const res = await fetch("/api/dfd", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config, input: buildInput() }),
+        body: JSON.stringify({
+          config,
+          input: buildInput(),
+          images: images.length > 0
+            ? images.map((img) => ({ mimeType: img.mimeType, dataUrl: img.dataUrl, name: img.name }))
+            : undefined,
+        }),
       });
       if (!res.ok) throw new Error("Failed to generate DFD");
       const data: DfdResult = await res.json();
@@ -647,58 +561,16 @@ export function ThreatModelStudio({
     } finally {
       setLoading(null);
     }
-  }, [config, onOpenConfig, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants]);
+  }, [config, onOpenConfig, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants, images]);
 
-  const generateGherkin = useCallback(async () => {
-    if (!requireConfig()) return;
-    if (!threatModel || threatModel.threats.length === 0) {
-      toast.error("Generate a threat model first.");
-      return;
-    }
-    setLoading("gherkin");
-    setError(null);
-    setActiveTab("gherkin");
-    try {
-      const res = await fetch("/api/gherkin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config, threats: threatModel.threats }),
-      });
-      if (!res.ok) throw new Error("Failed to generate Gherkin tests");
-      const data: GherkinResult = await res.json();
-      setGherkin(data);
-      toast.success(`Generated ${data.scenarios.length} BDD test scenarios`);
-      setTimeout(
-        () => resultsRef.current?.scrollIntoView({ behavior: "smooth" }),
-        200
-      );
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Unexpected error generating Gherkin tests";
-      setError(msg);
-      toast.error(msg);
-    } finally {
-      setLoading(null);
-    }
-  }, [config, onOpenConfig, threatModel]);
+  const hasAnyResult = threatModel || mitigations || dreadScores || dfd;
 
-  const hasAnyResult =
-    threatModel || attackTree || mitigations || dreadScores || dfd || gherkin;
-
-  // Bundle of all available artifacts for full-report Excel export.
+  // Bundle for Excel export â€” single STRIDE sheet, with current controls per threat.
   const excelBundle: ExcelBundle = {
     threatModel: threatModel ?? undefined,
-    mitigations: mitigations ?? undefined,
-    dreadScores: dreadScores ?? undefined,
-    dfd: dfd ?? undefined,
-    gherkin: gherkin ?? undefined,
+    currentControls: currentControls,
   };
-  const hasExcelContent = !!(
-    threatModel ||
-    (mitigations && mitigations.mitigations.length) ||
-    (dreadScores && dreadScores.length) ||
-    (dfd && dfd.components.length) ||
-    (gherkin && gherkin.scenarios.length)
-  );
+  const hasExcelContent = !!threatModel;
 
   return (
     <section id="studio" className="relative pt-2 pb-4 sm:pt-3 sm:pb-6 flex-1">
@@ -710,7 +582,7 @@ export function ThreatModelStudio({
               Analysis Workspace
             </h2>
             <p className="text-sm text-neutral-500 mt-1">
-              Describe the system · generate threat models, attack trees, mitigations, DREAD, DFD, and BDD tests.
+            Describe the system Â· generate threat models, mitigations, DREAD scores, and data flow diagrams.
             </p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
@@ -736,9 +608,9 @@ export function ThreatModelStudio({
                 <span className="w-1.5 h-1.5 rounded-full bg-neutral-900" />
                 STRIDE
               </span>
-              <span>·</span>
+              <span>Â·</span>
               <span>OWASP LLM/ASI</span>
-              <span>·</span>
+              <span>Â·</span>
               <span>MITRE ATT&CK</span>
             </div>
           </div>
@@ -817,7 +689,7 @@ export function ThreatModelStudio({
                   id="description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Describe the application: what it does, who uses it, key technologies, integrations, data flows, trust boundaries…"
+                  placeholder="Describe the application: what it does, who uses it, key technologies, integrations, data flows, trust boundariesâ€¦"
                   className="min-h-[140px] rounded-xl resize-y"
                 />
                 <div className="flex items-center justify-between text-xs text-neutral-400">
@@ -852,7 +724,7 @@ export function ThreatModelStudio({
                 </div>
               </div>
 
-              {/* Image Upload Zone — optional, session-only */}
+              {/* Image Upload Zone â€” optional, session-only */}
               <ImageUploadZone
                 images={images}
                 isFull={isFull}
@@ -904,7 +776,7 @@ export function ThreatModelStudio({
                   {loading === "threats" ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Analyzing…
+                      Analyzingâ€¦
                     </>
                   ) : (
                     <>
@@ -938,16 +810,12 @@ export function ThreatModelStudio({
                       switch (tab.id) {
                         case "threats":
                           return !!threatModel;
-                        case "attack-tree":
-                          return !!attackTree;
                         case "mitigations":
                           return !!mitigations;
                         case "dread":
                           return !!dreadScores;
                         case "dfd":
                           return !!dfd;
-                        case "gherkin":
-                          return !!gherkin;
                       }
                     })();
                     return (
@@ -992,22 +860,10 @@ export function ThreatModelStudio({
                       loading={loading === "threats"}
                       onNext={generateMitigations}
                       onDread={generateDread}
-                      onGherkin={generateGherkin}
-                      onRecommendations={generateRecommendations}
-                      loadingRecommendations={loading === "recommendations"}
-                      recommendations={recommendations}
-                      justifications={justifications}
-                      onJustificationChange={(id, val) =>
-                        setJustifications((prev) => ({ ...prev, [id]: val }))
+                      currentControls={currentControls}
+                      onCurrentControlsChange={(id, val) =>
+                        setCurrentControls((prev) => ({ ...prev, [id]: val }))
                       }
-                      bundle={excelBundle}
-                    />
-                  )}
-                  {activeTab === "attack-tree" && (
-                    <AttackTreeTab
-                      result={attackTree}
-                      loading={loading === "attack-tree"}
-                      onGenerate={generateAttackTree}
                       bundle={excelBundle}
                     />
                   )}
@@ -1032,14 +888,6 @@ export function ThreatModelStudio({
                       result={dfd}
                       loading={loading === "dfd"}
                       onGenerate={generateDfd}
-                      bundle={excelBundle}
-                    />
-                  )}
-                  {activeTab === "gherkin" && (
-                    <GherkinTab
-                      result={gherkin}
-                      loading={loading === "gherkin"}
-                      onGenerate={generateGherkin}
                       bundle={excelBundle}
                     />
                   )}
@@ -1111,24 +959,16 @@ function ThreatsTab({
   loading,
   onNext,
   onDread,
-  onGherkin,
-  onRecommendations,
-  loadingRecommendations,
-  recommendations,
-  justifications,
-  onJustificationChange,
+  currentControls,
+  onCurrentControlsChange,
   bundle,
 }: {
   result: ThreatModelResult | null;
   loading: boolean;
   onNext: () => void;
   onDread: () => void;
-  onGherkin: () => void;
-  onRecommendations: () => void;
-  loadingRecommendations: boolean;
-  recommendations: RecommendationResult | null;
-  justifications: Record<string, string>;
-  onJustificationChange: (id: string, val: string) => void;
+  currentControls: Record<string, string>;
+  onCurrentControlsChange: (id: string, val: string) => void;
   bundle: ExcelBundle;
 }) {
   if (loading) return <LoadingBlock label="Identifying STRIDE threats" />;
@@ -1212,8 +1052,8 @@ function ThreatsTab({
           <ThreatCard
             key={t.id || i}
             threat={t}
-            justification={justifications[t.id] ?? ""}
-            onJustificationChange={(val) => onJustificationChange(t.id, val)}
+            currentControl={currentControls[t.id] ?? ""}
+            onCurrentControlChange={(val) => onCurrentControlsChange(t.id, val)}
           />
         ))}
       </div>
@@ -1237,7 +1077,6 @@ function ThreatsTab({
         >
           <Wrench className="w-4 h-4" />
           Generate Mitigations
-          <ChevronRight className="w-4 h-4" />
         </Button>
         <Button
           onClick={onDread}
@@ -1247,38 +1086,21 @@ function ThreatsTab({
           <Gauge className="w-4 h-4" />
           Score with DREAD
         </Button>
-        <Button
-          onClick={onGherkin}
-          variant="outline"
-          className="rounded-full border-neutral-300"
-        >
-          <FileCheck2 className="w-4 h-4" />
-          Generate Test Cases
-        </Button>
       </div>
-
-      {/* Recommendations — send threats + justifications + images to LLM */}
-      <RecommendationsPanel
-        recommendations={recommendations}
-        loading={loadingRecommendations}
-        onGenerate={onRecommendations}
-        hasThreats={result.threats.length > 0}
-        justificationCount={Object.values(justifications).filter(Boolean).length}
-      />
     </div>
   );
 }
 
 function ThreatCard({
   threat,
-  justification,
-  onJustificationChange,
+  currentControl,
+  onCurrentControlChange,
 }: {
   threat: Threat;
-  justification: string;
-  onJustificationChange: (val: string) => void;
+  currentControl: string;
+  onCurrentControlChange: (val: string) => void;
 }) {
-  const [showJustification, setShowJustification] = useState(false);
+  const [showControl, setShowControl] = useState(false);
   const cat = STRIDE_CATEGORIES.find((c) => c.name === threat.strideCategory);
   return (
     <Card className="p-5 apple-card">
@@ -1330,29 +1152,27 @@ function ThreatCard({
                 ))}
               </div>
             )}
-          </div>
-
-          {/* Collapsible justification textarea */}
+           {/* Collapsible current controls textarea */}
           <div className="mt-3 pt-3 border-t border-neutral-100">
             <button
               type="button"
-              onClick={() => setShowJustification((v) => !v)}
+              onClick={() => setShowControl((v) => !v)}
               className="flex items-center gap-1.5 text-xs text-neutral-500 hover:text-neutral-700 transition-colors"
             >
-              {showJustification ? (
+              {showControl ? (
                 <ChevronUp className="w-3 h-3" />
               ) : (
                 <ChevronDown className="w-3 h-3" />
               )}
-              {justification
-                ? "Edit analyst justification"
-                : "Add analyst justification (optional)"}
-              {justification && (
+              {currentControl
+                ? "Edit current controls"
+                : "Add current controls (optional)"}
+              {currentControl && (
                 <span className="ml-1 w-1.5 h-1.5 rounded-full bg-neutral-900" />
               )}
             </button>
             <AnimatePresence>
-              {showJustification && (
+              {showControl && (
                 <motion.div
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: "auto" }}
@@ -1361,20 +1181,21 @@ function ThreatCard({
                   className="overflow-hidden"
                 >
                   <textarea
-                    id={`justification-${threat.id}`}
-                    value={justification}
-                    onChange={(e) => onJustificationChange(e.target.value)}
-                    placeholder={`As a security architect, add context specific to your organization for ${threat.id}… e.g. "We already enforce strict audience validation on all SAML assertions"`}
+                    id={`control-${threat.id}`}
+                    value={currentControl}
+                    onChange={(e) => onCurrentControlChange(e.target.value)}
+                    placeholder={`Describe existing controls in your organization for ${threat.id}â€¦ e.g. "MFA enforced on all admin accounts via Azure AD Conditional Access"`}
                     maxLength={500}
                     rows={3}
                     className="mt-2 w-full text-xs text-neutral-700 placeholder-neutral-400 bg-neutral-50 border border-neutral-200 rounded-lg p-3 resize-none focus:outline-none focus:ring-1 focus:ring-neutral-400"
                   />
                   <div className="flex justify-end mt-1">
-                    <span className="text-[10px] text-neutral-400">{justification.length}/500</span>
+                    <span className="text-[10px] text-neutral-400">{currentControl.length}/500</span>
                   </div>
                 </motion.div>
               )}
             </AnimatePresence>
+          </div>
           </div>
         </div>
       </div>
@@ -1412,7 +1233,7 @@ function AttackTreeTab({
           <div>
             <h3 className="text-title text-neutral-900 mb-1">Attack Tree</h3>
             <p className="text-sm text-neutral-500">
-              Adversary goal decomposition — root goal flows down to leaf techniques.
+              Adversary goal decomposition â€” root goal flows down to leaf techniques.
             </p>
           </div>
           <ExportMenu
@@ -1487,7 +1308,7 @@ function TreeView({
         }`}
         style={{ paddingLeft: `${depth * 16}px` }}
       >
-        {depth > 0 && <span className="text-neutral-400 mr-2">└─</span>}
+        {depth > 0 && <span className="text-neutral-400 mr-2">â””â”€</span>}
         {node.goal}
       </div>
       {(node.subgoals || []).map((sg: AttackTreeNode, i: number) => (
@@ -1749,7 +1570,7 @@ function DfdTab({
               Data Flow Diagram
             </h3>
             <p className="text-sm text-neutral-500">
-              {result.components.length} components · {result.flows.length} data flows
+              {result.components.length} components Â· {result.flows.length} data flows
             </p>
           </div>
           <ExportMenu
@@ -1984,7 +1805,7 @@ function CopyMermaidBar({ source }: { source: string }) {
   const copy = async () => {
     await navigator.clipboard.writeText(source);
     setCopied(true);
-    toast.success("Mermaid source copied — paste into mermaid.live or draw.io");
+    toast.success("Mermaid source copied â€” paste into mermaid.live or draw.io");
     setTimeout(() => setCopied(false), 2500);
   };
   return (
@@ -1996,7 +1817,7 @@ function CopyMermaidBar({ source }: { source: string }) {
             Mermaid diagram ready
           </p>
           <p className="text-xs text-neutral-500">
-            Paste into mermaid.live, draw.io (Arrange → Insert → Advanced → Mermaid), or any Markdown editor.
+            Paste into mermaid.live, draw.io (Arrange â†’ Insert â†’ Advanced â†’ Mermaid), or any Markdown editor.
           </p>
         </div>
       </div>
@@ -2017,7 +1838,7 @@ function LoadingBlock({ label }: { label: string }) {
     <Card className="p-12 apple-card">
       <div className="flex flex-col items-center justify-center text-center">
         <Loader2 className="w-8 h-8 animate-spin text-neutral-900 mb-4" />
-        <p className="text-sm font-medium text-neutral-900">{label}…</p>
+        <p className="text-sm font-medium text-neutral-900">{label}â€¦</p>
         <p className="text-xs text-neutral-500 mt-1">
           The AI agent is reasoning through your application.
         </p>
@@ -2086,7 +1907,7 @@ function ExportMenu({
       kind: "xlsx",
       fmt: "Excel",
       label: "Excel",
-      sub: ".xlsx · multi-sheet workbook",
+      sub: ".xlsx Â· multi-sheet workbook",
       bundle: formats.xlsx.bundle,
       filename: formats.xlsx.filename,
     });
@@ -2095,7 +1916,7 @@ function ExportMenu({
       kind: "text",
       fmt: "Markdown",
       label: "Markdown",
-      sub: ".md · formatted table",
+      sub: ".md Â· formatted table",
       content: formats.markdown.content,
       filename: formats.markdown.filename,
       mime: "text/markdown",
@@ -2105,7 +1926,7 @@ function ExportMenu({
       kind: "text",
       fmt: "CSV",
       label: "CSV",
-      sub: ".csv · spreadsheet-ready",
+      sub: ".csv Â· spreadsheet-ready",
       content: formats.csv.content,
       filename: formats.csv.filename,
       mime: "text/csv",
@@ -2115,7 +1936,7 @@ function ExportMenu({
       kind: "text",
       fmt: "JSON",
       label: "JSON",
-      sub: ".json · structured",
+      sub: ".json Â· structured",
       content: formats.json.content,
       filename: formats.json.filename,
       mime: "application/json",
@@ -2125,7 +1946,7 @@ function ExportMenu({
       kind: "text",
       fmt: "Mermaid",
       label: "Mermaid",
-      sub: ".mmd · draw.io / mermaid.live",
+      sub: ".mmd Â· draw.io / mermaid.live",
       content: formats.mermaid.content,
       filename: formats.mermaid.filename,
       mime: "text/plain",
@@ -2135,7 +1956,7 @@ function ExportMenu({
       kind: "text",
       fmt: "Text",
       label: "Text",
-      sub: ".txt · plain",
+      sub: ".txt Â· plain",
       content: formats.text.content,
       filename: formats.text.filename,
       mime: "text/plain",
@@ -2228,7 +2049,7 @@ function ImageUploadZone({
         <Label className="text-xs text-neutral-500 flex items-center gap-1.5">
           <ImagePlus className="w-3.5 h-3.5" />
           Architecture diagrams
-          <span className="text-neutral-400 font-normal">(optional · up to 5 · PNG/JPEG/WebP · max 4 MB each)</span>
+          <span className="text-neutral-400 font-normal">(optional Â· up to 5 Â· PNG/JPEG/WebP Â· max 4 MB each)</span>
         </Label>
         {images.length > 0 && (
           <button
@@ -2259,7 +2080,7 @@ function ImageUploadZone({
             Drag &amp; drop diagrams here, or{" "}
             <span className="font-medium text-neutral-700">click to browse</span>
             <br />
-            <span className="text-neutral-400">PNG · JPEG · WebP · max 4 MB each · up to 5 images</span>
+            <span className="text-neutral-400">PNG Â· JPEG Â· WebP Â· max 4 MB each Â· up to 5 images</span>
           </p>
           <input
             ref={inputRef}
@@ -2305,145 +2126,5 @@ function ImageUploadZone({
         </div>
       )}
     </div>
-  );
-}
-
-/* ---------------- Recommendations Panel ---------------- */
-
-function RecommendationsPanel({
-  recommendations,
-  loading,
-  onGenerate,
-  hasThreats,
-  justificationCount,
-}: {
-  recommendations: RecommendationResult | null;
-  loading: boolean;
-  onGenerate: () => void;
-  hasThreats: boolean;
-  justificationCount: number;
-}) {
-  const effortColor = (effort: string) => {
-    switch (effort) {
-      case "High":   return "bg-neutral-800 text-white";
-      case "Medium": return "bg-neutral-500 text-white";
-      default:       return "bg-neutral-200 text-neutral-800";
-    }
-  };
-
-  return (
-    <Card className="p-6 sm:p-8 apple-card border-2 border-dashed border-neutral-200">
-      <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
-        <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-neutral-900 flex items-center justify-center flex-shrink-0">
-            <Lightbulb className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h4 className="text-base font-semibold text-neutral-900">
-              Generate Recommendations
-            </h4>
-            <p className="text-xs text-neutral-500 mt-0.5 leading-relaxed max-w-lg">
-              Sends all threat model findings
-              {justificationCount > 0 ? `, your ${justificationCount} analyst note${justificationCount > 1 ? "s" : ""},` : ""}
-              {" "}application details, and any uploaded diagrams to the LLM for prioritized, actionable recommendations.
-            </p>
-          </div>
-        </div>
-        <Button
-          onClick={onGenerate}
-          disabled={loading || !hasThreats}
-          className="rounded-full bg-neutral-900 text-white hover:bg-neutral-800 flex-shrink-0"
-        >
-          {loading ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Generating…
-            </>
-          ) : (
-            <>
-              <Lightbulb className="w-4 h-4" />
-              {recommendations ? "Regenerate" : "Generate Recommendations"}
-            </>
-          )}
-        </Button>
-      </div>
-
-      {loading && (
-        <div className="flex items-center gap-3 p-4 rounded-xl bg-neutral-50 border border-neutral-200">
-          <Loader2 className="w-4 h-4 animate-spin text-neutral-500" />
-          <span className="text-sm text-neutral-600">
-            Analyzing threats, context, and diagrams — generating recommendations…
-          </span>
-        </div>
-      )}
-
-      {!loading && recommendations && (
-        <div className="space-y-4">
-          {recommendations.executiveSummary && (
-            <div className="p-4 rounded-xl bg-neutral-50 border border-neutral-200">
-              <p className="text-xs text-neutral-500 mb-1 font-medium">EXECUTIVE SUMMARY</p>
-              <p className="text-sm text-neutral-700 leading-relaxed">
-                {recommendations.executiveSummary}
-              </p>
-            </div>
-          )}
-          <div className="space-y-3">
-            {recommendations.recommendations.map((rec, i) => (
-              <div
-                key={i}
-                className="p-4 rounded-xl bg-white border border-neutral-200 space-y-3"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 flex-wrap mb-1.5">
-                      {rec.threatIds.map((id) => (
-                        <span
-                          key={id}
-                          className="text-[10px] px-1.5 py-0.5 rounded bg-neutral-100 text-neutral-600 font-mono"
-                        >
-                          {id}
-                        </span>
-                      ))}
-                    </div>
-                    <p className="text-sm font-semibold text-neutral-900 leading-snug">
-                      {rec.action}
-                    </p>
-                  </div>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${effortColor(rec.effort)}`}
-                  >
-                    {rec.effort} effort
-                  </span>
-                </div>
-                {rec.steps.length > 0 && (
-                  <ul className="space-y-1">
-                    {rec.steps.map((step, j) => (
-                      <li key={j} className="flex items-start gap-2 text-sm text-neutral-600">
-                        <span className="w-4 h-4 rounded-full border border-neutral-300 flex items-center justify-center text-[9px] text-neutral-500 flex-shrink-0 mt-0.5">
-                          {j + 1}
-                        </span>
-                        {step}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {rec.riskReduction && (
-                  <p className="text-xs text-neutral-500 flex items-center gap-1.5 pt-1 border-t border-neutral-100">
-                    <span className="font-medium text-neutral-700">Risk reduction:</span>
-                    {rec.riskReduction}
-                  </p>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {!loading && !recommendations && !hasThreats && (
-        <p className="text-xs text-neutral-400 text-center py-2">
-          Generate a threat model first to enable recommendations.
-        </p>
-      )}
-    </Card>
   );
 }

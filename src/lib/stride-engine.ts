@@ -664,7 +664,8 @@ function treeToMermaid(
 export async function generateMitigations(
   config: LlmConfig,
   input: ThreatModelInput,
-  threats: Threat[]
+  threats: Threat[],
+  images?: LlmImage[]
 ): Promise<MitigationResult> {
   const context = buildContextString(input);
   const threatSummary = threats
@@ -690,7 +691,7 @@ Return ONLY a JSON object (no prose, no markdown fences) with this exact shape:
   "hardeningChecklist": ["checklist item 1", "..."]
 }`;
 
-  const raw = await callLLM(config, [{ role: "user", content: prompt }]);
+  const raw = await callLLM(config, [buildUserMessage(prompt, images)]);
   const parsed = parseJsonLoose(raw);
   if (!parsed || !Array.isArray(parsed.mitigations)) {
     return { mitigations: [], hardeningChecklist: [] };
@@ -739,10 +740,13 @@ Return ONLY a JSON object (no prose, no markdown fences) with this exact shape:
 
 export async function generateDreadScores(
   config: LlmConfig,
-  threats: Threat[]
+  threats: Threat[],
+  input?: ThreatModelInput,
+  images?: LlmImage[]
 ): Promise<DreadScore[]> {
+  const context = input ? buildContextString(input) + "\n\n" : "";
   const threatList = threats.map((t) => `- ${t.id}: ${t.threat}`).join("\n");
-  const prompt = `THREATS TO SCORE:
+  const prompt = `${context}THREATS TO SCORE:
 ${threatList}
 
 TASK: Score each threat using the DREAD model. Each dimension is 1-10 (10 = worst). Total = sum of 5 dimensions. Severity bands: <10 Low, 10-19 Medium, 20-29 High, 30-50 Critical.
@@ -761,7 +765,7 @@ Return ONLY a JSON array (no prose, no markdown fences) with this shape:
   }
 ]`;
 
-  const raw = await callLLM(config, [{ role: "user", content: prompt }]);
+  const raw = await callLLM(config, [buildUserMessage(prompt, images)]);
   const parsed = parseJsonLoose(raw);
 
   // Build canonical-title lookup to normalise LLM's threat labels.
@@ -812,7 +816,8 @@ Return ONLY a JSON array (no prose, no markdown fences) with this shape:
 
 export async function generateDfd(
   config: LlmConfig,
-  input: ThreatModelInput
+  input: ThreatModelInput,
+  images?: LlmImage[]
 ): Promise<DfdResult> {
   const context = buildContextString(input);
   const prompt = `${context}
@@ -830,7 +835,7 @@ Return ONLY a JSON object (no prose, no markdown fences) with this shape:
   "narrative": "2-3 sentence explanation of the data flow and trust boundaries"
 }`;
 
-  const raw = await callLLM(config, [{ role: "user", content: prompt }]);
+  const raw = await callLLM(config, [buildUserMessage(prompt, images)]);
   const parsed = parseJsonLoose(raw);
   if (!parsed || !Array.isArray(parsed.components)) {
     return { components: [], flows: [], narrative: "", mermaid: "graph LR" };
