@@ -514,9 +514,11 @@ async function callLLM(
           // System prompt goes in `instructions`, NOT in the input array.
           instructions: SYSTEM_PROMPT,
           input: messages,
-          // Force JSON output — model CANNOT return markdown fences or prose.
-          // Eliminates the parseJsonLoose fallback path on every call.
-          response_format: { type: "json_object" },
+          // Force JSON output on the Responses API.
+          // NOTE: The Responses API (POST /v1/responses) uses `text.format`,
+          // NOT `response_format` (which is the Chat Completions API field).
+          // Using the wrong field causes a 400 "Unsupported parameter" error.
+          text: { format: { type: "json_object" } },
         }),
       }
     );
