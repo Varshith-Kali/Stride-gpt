@@ -185,19 +185,35 @@ export interface SafetyMetricsResult {
   overallPosture: string;
 }
 
-const SYSTEM_PROMPT = `You are STRIDE GPT, an elite security architect specializing in threat modeling using the STRIDE methodology (Spoofing, Tampering, Repudiation, Information Disclosure, Denial of Service, Elevation of Privilege). You are also an expert in OWASP LLM Top 10, OWASP Agentic AI Top 10 (ASI), MITRE ATT&CK Enterprise, and MITRE ATLAS for ML/AI systems. You produce precise, actionable, structured security analysis.`;
+const SYSTEM_PROMPT = [
+  "You are STRIDE GPT — a principal security architect and threat modeling authority.",
+  "Specializations: STRIDE, OWASP LLM Top 10, OWASP Agentic AI / ASI Top 10, MITRE ATT&CK Enterprise, MITRE ATLAS for ML/AI.",
+  "OUTPUT RULES (strictly enforced):",
+  "  1. Return ONLY valid JSON matching the schema requested. No prose, no markdown fences, no commentary.",
+  "  2. MITRE ATT&CK IDs must be real published techniques (e.g. T1078, T1190). Never invent IDs.",
+  "  3. Risk levels (Low/Medium/High/Critical) must reflect realistic exploitability and impact — not worst-case by default.",
+  "  4. Threat descriptions must name the specific attack vector, affected component, and realistic impact.",
+  "  5. Do not repeat threats — each entry must be distinct in vector, component, or impact.",
+].join("\n");
 
-
+/**
+ * Compact key=value context block. ~30% fewer tokens than prose format
+ * with zero information loss. Faster TTFT on reasoning models.
+ */
 function buildContextString(input: ThreatModelInput): string {
-  return `APPLICATION CONTEXT:
-- Name: ${input.appName || "Unspecified"}
-- Type: ${input.appType}
-- Description: ${input.description}
-- Authentication methods: ${input.authentication.length ? input.authentication.join(", ") : "None specified"}
-- Internet-facing: ${input.internetFacing ? "Yes" : "No"}
-- Processes sensitive data: ${input.sensitiveData ? "Yes" : "No"}
-- Cloud-hosted: ${input.usesCloud ? "Yes" : "No"}
-- Multi-tenant: ${input.hasMultipleTenants ? "Yes" : "No"}`;
+  const flags = [
+    input.internetFacing    ? "internet-facing"      : "internal-only",
+    input.sensitiveData     ? "processes-PII/secrets" : "non-sensitive-data",
+    input.usesCloud         ? "cloud-hosted"          : "on-premise",
+    input.hasMultipleTenants ? "multi-tenant"         : "single-tenant",
+  ].join(", ");
+  return (
+    `APP_NAME=${input.appName || "(unnamed)"}` +
+    `\nAPP_TYPE=${input.appType}` +
+    `\nAUTH=${input.authentication.length ? input.authentication.join("+") : "none"}` +
+    `\nFLAGS=${flags}` +
+    `\nDESCRIPTION:\n${input.description}`
+  );
 }
 
 /**
@@ -323,8 +339,12 @@ export class LlmError extends Error {
   }
 }
 
-/** Request timeout for all LLM calls (90s — generation can be slow). */
-const LLM_TIMEOUT_MS = 90_000;
+/**
+ * Request timeout — 120 s matches the Next.js route `maxDuration = 120`.
+ * GPT-5.5 is a reasoning model: TTFT is higher but structured JSON output
+ * completes quickly once reasoning finishes. Align to the route cap.
+ */
+const LLM_TIMEOUT_MS = 120_000;
 
 /**
  * Fetch with a timeout via AbortController. Rejects with an LlmError of kind
@@ -378,11 +398,15 @@ function classifyOpenAIError(status: number, body: string): LlmError {
       status
     );
   }
-  // 429 — rate limit or quota
+  // 429 — rate limit or quota; parse Retry-After if present
   if (status === 429) {
+    const retryAfterMatch = body.match(/retry.after["\s:]+([\d.]+)/i);
+    const retryHint = retryAfterMatch
+      ? ` Retry after ${Math.ceil(parseFloat(retryAfterMatch[1]))}s.`
+      : " Wait a moment and try again.";
     return new LlmError(
       "rate-limit",
-      "Rate limited (429). You have exceeded your OpenAI quota or request rate. Wait a moment and try again.",
+      `Rate limited (429). You have exceeded your OpenAI quota or request rate.${retryHint}`,
       status
     );
   }
@@ -490,6 +514,9 @@ async function callLLM(
           // System prompt goes in `instructions`, NOT in the input array.
           instructions: SYSTEM_PROMPT,
           input: messages,
+          // Force JSON output — model CANNOT return markdown fences or prose.
+          // Eliminates the parseJsonLoose fallback path on every call.
+          response_format: { type: "json_object" },
         }),
       }
     );
@@ -607,7 +634,7 @@ Return ONLY a JSON object (no prose, no markdown fences) with this exact shape:
   "detectedPatterns": ["detected architectural pattern 1", "..."]
 }
 
-Produce at least 8 and up to 14 distinct threats covering all six STRIDE categories.`;
+Produce 8–20 distinct threats scaled to application complexity, covering all six STRIDE categories. Complex multi-service, cloud, or AI applications warrant more threats. Each must be unique in attack vector, component, or impact.`;
 
   const raw = await callLLM(config, [
     buildUserMessage(prompt, images),

@@ -1,6 +1,7 @@
 import * as React from "react";
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
+import { headers } from "next/headers";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
@@ -42,15 +43,26 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  /**
+   * Read the per-request CSP nonce injected by src/proxy.ts.
+   * The nonce is set on the *request* headers (not response) so it is
+   * available here during SSR and is never sent to the browser directly.
+   * Next.js uses it to allowlist inline scripts by nonce rather than
+   * relying solely on the blanket 'unsafe-inline' keyword.
+   */
+  const headersList = await headers();
+  const nonce = headersList.get("x-nonce") ?? undefined;
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body
         className={`${inter.variable} ${jetbrainsMono.variable} font-sans antialiased bg-background text-foreground`}
+        {...(nonce ? { "data-nonce": nonce } : {})}
       >
         {children}
         <Toaster />

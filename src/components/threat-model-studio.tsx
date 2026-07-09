@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo, useDeferredValue } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Shield,
@@ -662,17 +662,25 @@ export function ThreatModelStudio({
 
   const hasAnyResult = threatModel || mitigations || dreadScores || dfd || safetyMetrics;
 
-  // Safety metrics map keyed by threat ID for fast lookup and Excel export
-  const safetyMetricsMap = safetyMetrics
-    ? Object.fromEntries(safetyMetrics.metrics.map((m) => [m.threatId, m]))
-    : undefined;
+  // useMemo: only recompute when safetyMetrics changes — not on every keystroke.
+  const safetyMetricsMap = useMemo(
+    () =>
+      safetyMetrics
+        ? Object.fromEntries(safetyMetrics.metrics.map((m) => [m.threatId, m]))
+        : undefined,
+    [safetyMetrics]
+  );
 
-  // Bundle for Excel export -- single STRIDE sheet with Safety Metrics column.
-  const excelBundle: ExcelBundle = {
-    threatModel: threatModel ?? undefined,
-    currentControls: currentControls,
-    safetyMetrics: safetyMetricsMap,
-  };
+  // useMemo: stable object reference stops child components re-rendering on
+  // every form keystroke when the bundle contents haven't actually changed.
+  const excelBundle = useMemo<ExcelBundle>(
+    () => ({
+      threatModel: threatModel ?? undefined,
+      currentControls,
+      safetyMetrics: safetyMetricsMap,
+    }),
+    [threatModel, currentControls, safetyMetricsMap]
+  );
   const hasExcelContent = !!threatModel;
 
   return (
@@ -823,7 +831,9 @@ export function ThreatModelStudio({
                   className="min-h-[140px] rounded-xl resize-y"
                 />
                 <div className="flex items-center justify-between text-xs text-neutral-400">
-                  <span>{description.length} characters</span>
+                  {/* useDeferredValue: counter update is deferred so it never
+                      blocks the textarea's synchronous keystroke handler. */}
+                  <span>{useDeferredValue(description).length} characters</span>
                   {description.length > 0 && description.length < 10 && (
                     <span className="text-amber-600">
                       Add a few more details

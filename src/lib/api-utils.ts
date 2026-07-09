@@ -52,7 +52,7 @@ export async function readJsonRequest<T = unknown>(
     return {
       ok: false,
       error: NextResponse.json(
-        { error: "Request body too large (max 1 MB)." },
+        { error: "Request body too large (max 20 MB)." },
         { status: 413 }
       ),
     };
@@ -106,18 +106,24 @@ export function configRequiredError(): NextResponse {
  *   provider guidance, not server internals.
  * - All other errors: return a generic "Internal server error" message.
  *   The full error is logged server-side for debugging.
+ * - requestId: a random UUID per error response. Lets users report issues
+ *   precisely without exposing stack traces or file paths.
  */
 export function handleError(e: unknown): NextResponse {
-  console.error("[api] error:", e);
+  const requestId = crypto.randomUUID();
+  console.error(`[api] error [${requestId}]:`, e);
 
   if (e instanceof LlmError) {
     // LlmError messages are intentionally user-facing.
-    return NextResponse.json({ error: e.message }, { status: 502 });
+    return NextResponse.json(
+      { error: e.message, requestId },
+      { status: 502 }
+    );
   }
 
   // Never leak internal error messages, file paths, or stack traces.
   return NextResponse.json(
-    { error: "Internal server error. Please try again." },
+    { error: "Internal server error. Please try again.", requestId },
     { status: 500 }
   );
 }
