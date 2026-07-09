@@ -5,7 +5,7 @@ import {
   configRequiredError,
   handleError,
 } from "@/lib/api-utils";
-import { sanitizeThreats, LIMITS } from "@/lib/validation";
+import { sanitizeThreats, validateThreatModelInput, LIMITS } from "@/lib/validation";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -14,6 +14,7 @@ export async function POST(req: NextRequest) {
   try {
     const parsed = await readJsonRequest<{
       threats?: unknown;
+      input?: unknown;
     }>(req);
     if (!parsed.ok) return parsed.error;
 
@@ -34,7 +35,10 @@ export async function POST(req: NextRequest) {
     }
 
     const threats = sanitizeThreats(data.threats);
-    const result = await generateGherkin(config, threats);
+    // input is optional — if provided, gives the LLM real app context for
+    // more specific, component-targeted Gherkin test scenarios.
+    const input = validateThreatModelInput(data.input) ?? undefined;
+    const result = await generateGherkin(config, threats, input);
     return Response.json(result);
   } catch (e) {
     return handleError(e);

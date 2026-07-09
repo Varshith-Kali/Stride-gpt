@@ -603,42 +603,52 @@ export async function generateThreatModel(
     input.appType === "Generative AI application" ||
     input.appType === "Agentic AI application";
 
-  const prompt = `${context}${
-    images && images.length > 0
-      ? `\n- Architecture diagrams provided: ${images.length} image(s) — analyse them for additional trust boundaries, data flows, and components.`
-      : ""
-  }
+  const hasImages = images && images.length > 0;
 
-TASK: Produce a comprehensive STRIDE threat model for this application.${
-    isAi
+  const prompt =
+    `${context}` +
+    (hasImages
+      ? `\n\nARCHITECTURE DIAGRAM ANALYSIS (${images!.length} diagram(s) attached):` +
+        `\nBefore generating threats, carefully analyse every uploaded diagram to identify:` +
+        `\n  - All components, services, APIs, databases, queues, caches, and external systems visible` +
+        `\n  - Trust boundaries and network zones (DMZ, internal, cloud VPC, on-premise)` +
+        `\n  - Data flows, protocols, and communication patterns between components` +
+        `\n  - Authentication/authorisation touchpoints and where credentials are exchanged` +
+        `\n  - Any misconfigurations, overly permissive rules, or security gaps visible in the diagram` +
+        `\n  - Third-party integrations and supply chain touchpoints` +
+        `\nThe diagram is the ground truth for architecture — the description supplements it. Prioritise what you see in the diagram.`
+      : "") +
+    `\n\nTASK: Produce a comprehensive STRIDE threat model for this application.` +
+    (isAi
       ? " Since this is an AI application, also incorporate OWASP LLM Top 10 (LLM01–LLM10) and, for agentic systems, OWASP ASI Top 10 (ASI01–ASI10)."
-      : ""
-  } Also detect any relevant architectural patterns (e.g., RAG pipeline, multi-agent system, code execution environment, tool/MCP ecosystem).
+      : "") +
+    ` Detect any relevant architectural patterns (e.g., RAG pipeline, multi-agent system, code execution environment, tool/MCP ecosystem, microservices mesh, event-driven architecture).` +
+    `\n\nThreat generation rules:` +
+    `\n  - Every threat MUST reference a specific component or data flow from the application description${hasImages ? " or the uploaded diagram" : ""}` +
+    `\n  - Include the realistic attack vector (not just the category)` +
+    `\n  - Risk level must reflect exploitability given the authentication method(s) and deployment context` +
+    `\n  - MITRE ATT&CK IDs must be real published techniques — never invent an ID` +
+    `\n  - Cover all six STRIDE categories; complex or multi-service apps warrant 15–20 threats` +
+    `\n\nReturn ONLY a JSON object (no prose, no markdown fences) with this exact shape:\n` +
+    `{\n` +
+    `  "threats": [\n` +
+    `    {\n` +
+    `      "id": "T001",\n` +
+    `      "category": "short category label",\n` +
+    `      "threat": "concise threat title naming the component and attack",\n` +
+    `      "component": "exact component name from the architecture",\n` +
+    `      "description": "attack vector, exploitation method, and business impact in 2-3 sentences",\n` +
+    `      "strideCategory": "Spoofing | Tampering | Repudiation | Information Disclosure | Denial of Service | Elevation of Privilege",\n` +
+    `      "mitreAttack": ["T1078 Valid Accounts"],\n` +
+    `      "risk": "Low | Medium | High | Critical"\n` +
+    `    }\n` +
+    `  ],\n` +
+    `  "summary": "3-4 sentence executive summary of the overall risk profile and top-3 concerns",\n` +
+    `  "architectureNotes": "specific weak points, trust boundary violations, and high-risk data flows identified",\n` +
+    `  "detectedPatterns": ["pattern 1", "pattern 2"]\n` +
+    `}`;
 
-Return ONLY a JSON object (no prose, no markdown fences) with this exact shape:
-{
-  "threats": [
-    {
-      "id": "T001",
-      "category": "short category label",
-      "threat": "concise threat title",
-      "component": "affected component",
-      "description": "detailed explanation including attack vector and impact",
-      "strideCategory": "one of: Spoofing | Tampering | Repudiation | Information Disclosure | Denial of Service | Elevation of Privilege",
-      "mitreAttack": ["TXXXX (optional technique id with name)"],
-      "risk": "Low | Medium | High | Critical"
-    }
-  ],
-  "summary": "2-3 sentence executive summary of the risk profile",
-  "architectureNotes": "notes on architectural weak points and trust boundaries",
-  "detectedPatterns": ["detected architectural pattern 1", "..."]
-}
-
-Produce 8–20 distinct threats scaled to application complexity, covering all six STRIDE categories. Complex multi-service, cloud, or AI applications warrant more threats. Each must be unique in attack vector, component, or impact.`;
-
-  const raw = await callLLM(config, [
-    buildUserMessage(prompt, images),
-  ]);
+  const raw = await callLLM(config, [buildUserMessage(prompt, images)]);
   const parsed = parseJsonLoose(raw);
   if (!parsed || !Array.isArray(parsed.threats)) {
     return {
@@ -650,12 +660,12 @@ Produce 8–20 distinct threats scaled to application complexity, covering all s
   }
   return {
     threats: sanitizeThreats(parsed.threats),
-    summary: clamp(sanitizeText(parsed.summary ?? ""), 1000),
+    summary: clamp(sanitizeText(parsed.summary ?? ""), 1500),
     architectureNotes: clamp(sanitizeText(parsed.architectureNotes ?? ""), 4000),
     detectedPatterns: Array.isArray(parsed.detectedPatterns)
       ? parsed.detectedPatterns
           .filter((p: unknown) => typeof p === "string")
-          .map((p: string) => clamp(sanitizeText(p), 100))
+          .map((p: string) => clamp(sanitizeText(p), 150))
           .slice(0, 20)
       : [],
   };
@@ -663,32 +673,36 @@ Produce 8–20 distinct threats scaled to application complexity, covering all s
 
 export async function generateAttackTree(
   config: LlmConfig,
-  input: ThreatModelInput
+  input: ThreatModelInput,
+  images?: LlmImage[]
 ): Promise<AttackTreeResult> {
   const context = buildContextString(input);
-  const prompt = `${context}
+  const hasImages = images && images.length > 0;
+  const prompt =
+    `${context}` +
+    (hasImages
+      ? `\n\nARCHITECTURE DIAGRAMS (${images!.length} attached): Use the visible components, entry points, and trust boundaries to ground the attack paths in the actual architecture.`
+      : "") +
+    `\n\nTASK: Build a realistic attack tree for this application. ` +
+    `The root goal is "Compromise ${input.appName || "the application"}". ` +
+    `Decompose into sub-goals and leaf techniques reflecting the actual components${hasImages ? " visible in the diagram" : " described"}. ` +
+    `Minimum 3 levels of depth, 6-10 distinct leaf techniques. ` +
+    `Leaf techniques must reference specific components (e.g., "Exploit JWT misconfiguration in Auth Service", not just "Authentication bypass").` +
+    `\n\nReturn ONLY a JSON object (no prose, no markdown fences) with this exact shape:\n` +
+    `{\n` +
+    `  "root": {\n` +
+    `    "goal": "Compromise ${input.appName || "the application"}",\n` +
+    `    "subgoals": [\n` +
+    `      {\n` +
+    `        "goal": "sub-goal",\n` +
+    `        "subgoals": [{ "goal": "leaf technique referencing a specific component", "subgoals": [] }]\n` +
+    `      }\n` +
+    `    ]\n` +
+    `  },\n` +
+    `  "narrative": "2-3 paragraph narrative of the most plausible attack paths and the critical chokepoints to defend"\n` +
+    `}\n\nI will render the Mermaid diagram from the tree structure.`;
 
-TASK: Build an attack tree showing how an adversary could compromise this application. The root node is the attacker's primary goal ("Compromise ${input.appName || "the application"}"). Sub-goals should decompose into concrete techniques, including at least 3 levels of depth and 6-8 leaf techniques.
-
-Return ONLY a JSON object (no prose, no markdown fences) with this exact shape:
-{
-  "root": {
-    "goal": "primary attacker goal",
-    "subgoals": [
-      {
-        "goal": "sub-goal",
-        "subgoals": [
-          { "goal": "leaf technique", "subgoals": [] }
-        ]
-      }
-    ]
-  },
-  "narrative": "2-3 paragraph narrative explaining the most plausible attack paths"
-}
-
-I will render the Mermaid diagram myself from the tree structure.`;
-
-  const raw = await callLLM(config, [{ role: "user", content: prompt }]);
+  const raw = await callLLM(config, [buildUserMessage(prompt, images)]);
   const parsed = parseJsonLoose(raw);
   if (!parsed || !parsed.root) {
     return {
@@ -734,25 +748,34 @@ export async function generateMitigations(
   const threatSummary = threats
     .map((t) => `- [${t.strideCategory}] ${t.threat}: ${t.description}`)
     .join("\n");
-  const prompt = `${context}
-
-IDENTIFIED THREATS:
-${threatSummary}
-
-TASK: For each threat above, propose a concrete, implementable mitigation. Also produce a hardening checklist of 6-10 security controls every team member should verify.
-
-Return ONLY a JSON object (no prose, no markdown fences) with this exact shape:
-{
-  "mitigations": [
-    {
-      "threat": "the threat title being mitigated",
-      "mitigation": "specific control or countermeasure with implementation guidance",
-      "priority": "Low | Medium | High",
-      "owaspReference": "optional reference e.g. A01:2021-Broken Access Control"
-    }
-  ],
-  "hardeningChecklist": ["checklist item 1", "..."]
-}`;
+  const hasImages = images && images.length > 0;
+  const prompt =
+    `${context}` +
+    (hasImages
+      ? `\n\nARCHITECTURE DIAGRAMS (${images!.length} attached): Use the visible components and architecture to make mitigations specific to the actual deployment — not generic advice.`
+      : "") +
+    `\n\nIDENTIFIED THREATS (${threats.length} total):\n${threatSummary}` +
+    `\n\nTASK: For each threat above, propose a concrete, implementable mitigation tailored to this specific application and its architecture.` +
+    `\n\nMitigation quality rules:` +
+    `\n  - Each mitigation must be actionable by an engineering team, not generic advice` +
+    `\n  - Reference the specific component, library, framework, or configuration that needs to change` +
+    `\n  - Include the relevant OWASP or NIST control reference where applicable` +
+    `\n  - Priority (High/Medium/Low) must reflect the threat's risk level AND ease of exploitation` +
+    `\n  - Hardening checklist items must be verification steps, not just category headings` +
+    `\n\nReturn ONLY a JSON object (no prose, no markdown fences) with this exact shape:\n` +
+    `{\n` +
+    `  "mitigations": [\n` +
+    `    {\n` +
+    `      "threat": "exact threat title from the list above",\n` +
+    `      "mitigation": "specific, implementable control with component reference and configuration guidance",\n` +
+    `      "priority": "Low | Medium | High",\n` +
+    `      "owaspReference": "e.g. A01:2021-Broken Access Control or NIST SP 800-53 AC-3"\n` +
+    `    }\n` +
+    `  ],\n` +
+    `  "hardeningChecklist": [\n` +
+    `    "Verify: specific, testable security control for this application"\n` +
+    `  ]\n` +
+    `}`;
 
   const raw = await callLLM(config, [buildUserMessage(prompt, images)]);
   const parsed = parseJsonLoose(raw);
@@ -809,24 +832,37 @@ export async function generateDreadScores(
 ): Promise<DreadScore[]> {
   const context = input ? buildContextString(input) + "\n\n" : "";
   const threatList = threats.map((t) => `- ${t.id}: ${t.threat}`).join("\n");
-  const prompt = `${context}THREATS TO SCORE:
-${threatList}
-
-TASK: Score each threat using the DREAD model. Each dimension is 1-10 (10 = worst). Total = sum of 5 dimensions. Severity bands: <10 Low, 10-19 Medium, 20-29 High, 30-50 Critical.
-
-Return ONLY a JSON array (no prose, no markdown fences) with this shape:
-[
-  {
-    "threat": "threat title",
-    "damage": 1-10,
-    "reproducibility": 1-10,
-    "exploitability": 1-10,
-    "affectedUsers": 1-10,
-    "discoverability": 1-10,
-    "total": number,
-    "severity": "Low | Medium | High | Critical"
-  }
-]`;
+  const hasImages = images && images.length > 0;
+  const prompt =
+    `${context}` +
+    `\n\nTHREATS TO SCORE (${threats.length} total):\n${threatList}` +
+    (hasImages
+      ? `\n\nARCHITECTURE DIAGRAMS (${images!.length} attached): ` +
+        `Use the visible deployment context — internet exposure, component criticality, data sensitivity — ` +
+        `to calibrate scores. A component directly exposed to the internet warrants higher exploitability and discoverability scores.`
+      : "") +
+    `\n\nTASK: Score each threat using the DREAD model calibrated to this specific application context.` +
+    `\n\nDREAD scoring rules:` +
+    `\n  - Damage (1-10): potential business/data impact if the threat is fully exploited` +
+    `\n  - Reproducibility (1-10): how reliably an attacker can reproduce the attack` +
+    `\n  - Exploitability (1-10): skill/resources required (10 = unauthenticated, trivial exploit)` +
+    `\n  - Affected Users (1-10): breadth of impact (10 = all users or all tenants)` +
+    `\n  - Discoverability (1-10): how easily the vulnerability can be found (10 = publicly known)` +
+    `\n  - Total = sum of all 5 dimensions. Severity: <10 Low, 10-19 Medium, 20-29 High, 30-50 Critical` +
+    `\n  - Scores must be differentiated — avoid scoring every threat identically` +
+    `\n\nReturn ONLY a JSON array (no prose, no markdown fences):\n` +
+    `[\n` +
+    `  {\n` +
+    `    "threat": "exact threat title",\n` +
+    `    "damage": 1-10,\n` +
+    `    "reproducibility": 1-10,\n` +
+    `    "exploitability": 1-10,\n` +
+    `    "affectedUsers": 1-10,\n` +
+    `    "discoverability": 1-10,\n` +
+    `    "total": <sum>,\n` +
+    `    "severity": "Low | Medium | High | Critical"\n` +
+    `  }\n` +
+    `]`;
 
   const raw = await callLLM(config, [buildUserMessage(prompt, images)]);
   const parsed = parseJsonLoose(raw);
@@ -883,20 +919,33 @@ export async function generateDfd(
   images?: LlmImage[]
 ): Promise<DfdResult> {
   const context = buildContextString(input);
-  const prompt = `${context}
-
-TASK: Generate a Level-0 Data Flow Diagram (DFD) for this application. Identify external entities, processes, data stores, and trust boundaries. Use concise component names (1-3 words, no special characters). Mark trust levels: "High" for trusted/internal services, "Medium" for processing layers, "Low" for anything internet-facing or third-party.
-
-Return ONLY a JSON object (no prose, no markdown fences) with this shape:
-{
-  "components": [
-    { "name": "concise name", "type": "External Entity | Process | Data Store | Trust Boundary", "trustLevel": "High | Medium | Low" }
-  ],
-  "flows": [
-    { "from": "source component name (must match a component name exactly)", "to": "destination component name (must match a component name exactly)", "description": "what data flows, in 3-6 words" }
-  ],
-  "narrative": "2-3 sentence explanation of the data flow and trust boundaries"
-}`;
+  const hasImages = images && images.length > 0;
+  const prompt =
+    `${context}` +
+    (hasImages
+      ? `\n\nARCHITECTURE DIAGRAMS (${images!.length} attached): Derive the component names, trust zones, and data flows directly from the diagram — do not invent components not visible or described.`
+      : "") +
+    `\n\nTASK: Generate a Level-0 Data Flow Diagram (DFD) for this application.` +
+    (hasImages
+      ? ` The diagram is the primary source — extract every visible component, service, database, queue, and external actor.`
+      : "") +
+    `\n\nDFD generation rules:` +
+    `\n  - Component names: 1-4 words, no special characters, must be unique` +
+    `\n  - Types: External Entity (users, third-party APIs), Process (services, functions), Data Store (DB, cache, queue), Trust Boundary` +
+    `\n  - Trust levels: High = internal/trusted services, Medium = processing/middleware, Low = internet-facing or third-party` +
+    `\n  - Flow "from"/"to" values MUST exactly match a component name in the components array` +
+    `\n  - Flow descriptions: what data travels and in which direction (3-6 words)` +
+    `\n  - Every internet-facing entry point must be a component` +
+    `\n\nReturn ONLY a JSON object (no prose, no markdown fences):\n` +
+    `{\n` +
+    `  "components": [\n` +
+    `    { "name": "API Gateway", "type": "Process", "trustLevel": "Low" }\n` +
+    `  ],\n` +
+    `  "flows": [\n` +
+    `    { "from": "API Gateway", "to": "Auth Service", "description": "JWT validation request" }\n` +
+    `  ],\n` +
+    `  "narrative": "2-3 sentence description of the data flow, trust zones, and primary security boundaries"\n` +
+    `}`;
 
   const raw = await callLLM(config, [buildUserMessage(prompt, images)]);
   const parsed = parseJsonLoose(raw);
@@ -995,26 +1044,35 @@ function dfdToMermaid(
 
 export async function generateGherkin(
   config: LlmConfig,
-  threats: Threat[]
+  threats: Threat[],
+  input?: ThreatModelInput
 ): Promise<GherkinResult> {
-  const threatList = threats.map((t) => `- ${t.threat}: ${t.description}`).join("\n");
-  const prompt = `THREATS:
-${threatList}
-
-TASK: Generate Gherkin (BDD) test cases that verify the system defends against each threat. Each scenario should be concrete and testable.
-
-Return ONLY a JSON object (no prose, no markdown fences) with this shape:
-{
-  "feature": "Feature: Threat Mitigation Verification",
-  "scenarios": [
-    {
-      "title": "Scenario: descriptive title",
-      "given": "Given ... precondition",
-      "when": "When ... action",
-      "then": ["Then ... expected outcome 1", "And ... outcome 2"]
-    }
-  ]
-}`;
+  const threatList = threats.map((t) => `- [${t.strideCategory}] ${t.threat}: ${t.description}`).join("\n");
+  const appContext = input ? buildContextString(input) : "";
+  const appName = input?.appName || "the application";
+  const prompt =
+    (appContext ? `APPLICATION CONTEXT:\n${appContext}\n\n` : "") +
+    `STRIDE THREATS (${threats.length} total):\n${threatList}` +
+    `\n\nTASK: Generate Gherkin (BDD) acceptance test scenarios that verify ${appName} defends against each threat above.` +
+    `\n\nScenario rules:` +
+    `\n  - Each scenario must be directly testable by a QA engineer using the application's actual stack` +
+    `\n  - "Given" must name a real application state (logged in as X, with Y configured, etc.)` +
+    `\n  - "When" must describe an attacker's concrete action against a specific component or endpoint` +
+    `\n  - "Then" outcomes must be observable system responses, not abstract assertions` +
+    `\n  - Cover both the attack attempt AND the expected defensive response` +
+    `\n  - Generate one scenario per threat` +
+    `\n\nReturn ONLY a JSON object (no prose, no markdown fences):\n` +
+    `{\n` +
+    `  "feature": "Feature: Security Threat Mitigation Verification for ${appName}",\n` +
+    `  "scenarios": [\n` +
+    `    {\n` +
+    `      "title": "Scenario: specific attack scenario title",\n` +
+    `      "given": "Given a specific precondition naming the component or user role",\n` +
+    `      "when": "When the attacker performs the specific action against the specific component",\n` +
+    `      "then": ["Then the system responds with a specific defence", "And the attempt is logged"]\n` +
+    `    }\n` +
+    `  ]\n` +
+    `}`;
 
   const raw = await callLLM(config, [{ role: "user", content: prompt }]);
   const parsed = parseJsonLoose(raw);
@@ -1189,32 +1247,37 @@ export async function generateSafetyMetrics(
   const prompt =
     `${context}` +
     (images && images.length > 0
-      ? `\n- Architecture diagrams: ${images.length} image(s) provided — consider them for control coverage analysis.`
+      ? `\n\nARCHITECTURE DIAGRAMS (${images.length} attached): ` +
+        `Use the visible deployment, network zones, and component interactions to assess whether listed controls ` +
+        `would realistically be effective given the actual architecture.`
       : "") +
-    `\n\nTASK: You are a senior principal security architect performing a security posture evaluation. ` +
-    `For EACH threat below, assess whether the listed "Current Controls" adequately mitigate the threat.\n\n` +
-    `Verdict definitions:\n` +
-    `  SAFE           — The controls fully and demonstrably mitigate this specific threat.\n` +
-    `  PARTIALLY_SAFE — Controls exist but leave meaningful gaps, attack surface, or edge cases unaddressed.\n` +
-    `  UNSAFE         — No controls are listed, or the listed controls do not address this threat at all.\n\n` +
-    `Evaluation criteria:\n` +
-    `- Judge against the specific STRIDE category and MITRE ATT&CK technique(s) for this threat.\n` +
-    `- Consider defence-in-depth: a control for one layer does not automatically cover another.\n` +
-    `- Be precise and ruthlessly honest. Err toward PARTIALLY_SAFE over SAFE unless coverage is unambiguous.\n` +
-    `- If no current controls are provided, the verdict MUST be UNSAFE.\n\n` +
-    `THREATS AND CONTROLS:\n${threatControlPairs}\n\n` +
-    `Return ONLY a JSON object (no prose, no markdown fences) with this exact shape:\n` +
+    `\n\nSECURITY POSTURE EVALUATION — ${threats.length} THREAT(S)` +
+    `\n\nYou are evaluating whether the user's CURRENT SECURITY CONTROLS adequately mitigate each identified threat.` +
+    `\nThis is NOT a mitigation recommendation exercise — it is a factual assessment of what is already in place.` +
+    `\n\nVERDICT DEFINITIONS (strictly apply these):` +
+    `\n  SAFE           — Controls FULLY and DEMONSTRABLY mitigate this threat. Coverage is unambiguous and defence-in-depth exists.` +
+    `\n  PARTIALLY_SAFE — Controls exist but leave meaningful gaps: attack surface remains, edge cases are unaddressed, or only one layer of defence covers a multi-layer threat.` +
+    `\n  UNSAFE         — No controls are listed, controls are irrelevant to this specific threat, or the listed controls are clearly insufficient.` +
+    `\n\nEVALUATION CRITERIA:` +
+    `\n  1. Judge against the SPECIFIC STRIDE category, attack vector, and MITRE ATT&CK technique(s) for each threat` +
+    `\n  2. A control valid for one layer (e.g., network firewall) does NOT automatically cover application-layer or identity-layer threats` +
+    `\n  3. Err toward PARTIALLY_SAFE over SAFE — real security requires defence-in-depth, not a single control` +
+    `\n  4. If no controls are provided for a threat, the verdict MUST be UNSAFE — no exceptions` +
+    `\n  5. Assess control QUALITY, not just presence: "we use HTTPS" is not a control for a SQL injection threat` +
+    `\n  6. Reasoning must cite BOTH the specific control listed AND the specific gap or why the control is adequate` +
+    `\n\nTHREATS AND CURRENT CONTROLS:\n${threatControlPairs}` +
+    `\n\nReturn ONLY a JSON object (no prose, no markdown fences) with this exact shape:\n` +
     `{\n` +
     `  "metrics": [\n` +
     `    {\n` +
     `      "threatId": "T001",\n` +
-    `      "threat": "<verbatim threat title>",\n` +
+    `      "threat": "verbatim threat title from the threat model",\n` +
     `      "verdict": "SAFE" | "PARTIALLY_SAFE" | "UNSAFE",\n` +
-    `      "reasoning": "<2-4 sentence rationale citing the control and the gap>",\n` +
-    `      "gaps": ["<gap 1>", "<gap 2>"]\n` +
+    `      "reasoning": "3-5 sentences citing: (1) what control is in place, (2) what the control does/does not address for this specific STRIDE category and attack vector, (3) why the verdict was assigned",\n` +
+    `      "gaps": ["Specific gap 1 — what is missing or insufficient", "Specific gap 2"]\n` +
     `    }\n` +
     `  ],\n` +
-    `  "overallPosture": "<one-paragraph executive summary of the aggregate security posture>"\n` +
+    `  "overallPosture": "2-3 sentence executive assessment of the aggregate security posture: what proportion of threats are covered, what the most critical uncovered areas are, and a one-sentence recommended priority action"\n` +
     `}`;
 
   const raw = await callLLM(config, [buildUserMessage(prompt, images)]);
@@ -1234,18 +1297,18 @@ export async function generateSafetyMetrics(
       verdict: VERDICTS.includes(m.verdict as SafetyVerdict)
         ? (m.verdict as SafetyVerdict)
         : "UNSAFE",
-      reasoning: clamp(sanitizeText((m.reasoning as string) ?? ""), 600),
+      reasoning: clamp(sanitizeText((m.reasoning as string) ?? ""), 800),
       gaps: Array.isArray(m.gaps)
         ? (m.gaps as unknown[])
             .filter((g): g is string => typeof g === "string")
-            .map((g) => clamp(sanitizeText(g), 200))
-            .slice(0, 5)
+            .map((g) => clamp(sanitizeText(g), 300))
+            .slice(0, 7)
         : [],
     }))
     .slice(0, 100);
 
   return {
     metrics,
-    overallPosture: clamp(sanitizeText((parsed.overallPosture as string) ?? ""), 1000),
+    overallPosture: clamp(sanitizeText((parsed.overallPosture as string) ?? ""), 1500),
   };
 }
