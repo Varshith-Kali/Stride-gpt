@@ -15,9 +15,10 @@ import type {
   MitigationResult,
   DreadScore,
   DfdResult,
+  SafetyMetric,
 } from "@/lib/stride-engine";
 
-export type ExportFormat = "markdown" | "csv" | "json" | "xlsx";
+export type ExportFormat = "xlsx" | "json";
 
 const csvEscape = (v: unknown): string => {
   const s = String(v ?? "");
@@ -520,6 +521,8 @@ export interface ExcelBundle {
   threatModel?: ThreatModelResult;
   /** Per-threat current controls, keyed by threat ID. */
   currentControls?: Record<string, string>;
+  /** Per-threat safety metrics verdicts from the LLM. Keyed by threat ID. */
+  safetyMetrics?: Record<string, SafetyMetric>;
 }
 
 /**
@@ -559,6 +562,7 @@ export function buildExcelWorkbook(bundle: ExcelBundle): ArrayBuffer {
 
   if (bundle.threatModel && bundle.threatModel.threats.length > 0) {
     const controls = bundle.currentControls ?? {};
+    const safetyMap = bundle.safetyMetrics ?? {};
     const rows: Record<string, unknown>[] = bundle.threatModel.threats.map(
       (t, idx) => ({
         "S.No":                     idx + 1,
@@ -567,6 +571,13 @@ export function buildExcelWorkbook(bundle: ExcelBundle): ArrayBuffer {
         "MITRE ATT\u0026CK Mapping": (t.mitreAttack ?? []).join("; "),
         "Risk Level":               t.risk,
         "Existing Controls":        controls[t.id] ?? "",
+        "Safety Metrics":           safetyMap[t.id]
+          ? safetyMap[t.id].verdict === "SAFE"
+            ? "SAFE"
+            : safetyMap[t.id].verdict === "PARTIALLY_SAFE"
+            ? "PARTIALLY SAFE"
+            : "UNSAFE"
+          : "",
       })
     );
     sheets.push({ name: "STRIDE", rows });

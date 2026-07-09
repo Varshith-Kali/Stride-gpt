@@ -31,36 +31,6 @@ export const PROVIDER_MODELS: Record<Provider, ProviderModel[]> = {
       label: "GPT-5.5",
       note: "Latest · Internal enterprise model",
     },
-    {
-      id: "gpt-4.1",
-      label: "GPT-4.1",
-      note: "High capability · Enterprise",
-    },
-    {
-      id: "gpt-4.1-mini",
-      label: "GPT-4.1 Mini",
-      note: "Fast + efficient · Enterprise",
-    },
-    {
-      id: "gpt-4o",
-      label: "GPT-4o",
-      note: "Multimodal · OpenAI standard",
-    },
-    {
-      id: "gpt-4o-mini",
-      label: "GPT-4o Mini",
-      note: "Lightweight · OpenAI standard",
-    },
-    {
-      id: "o3",
-      label: "o3",
-      note: "Advanced reasoning · OpenAI",
-    },
-    {
-      id: "o4-mini",
-      label: "o4-mini",
-      note: "Reasoning · fast + efficient",
-    },
   ],
 };
 

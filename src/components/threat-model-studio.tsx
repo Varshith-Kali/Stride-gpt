@@ -159,6 +159,22 @@ interface GherkinResult {
   scenarios: { title: string; given: string; when: string; then: string[] }[];
 }
 
+/** Safety verdict per threat — returned by the /api/safety-metrics endpoint. */
+type SafetyVerdict = "SAFE" | "PARTIALLY_SAFE" | "UNSAFE";
+
+interface SafetyMetric {
+  threatId: string;
+  threat: string;
+  verdict: SafetyVerdict;
+  reasoning: string;
+  gaps: string[];
+}
+
+interface SafetyMetricsResult {
+  metrics: SafetyMetric[];
+  overallPosture: string;
+}
+
 const STRIDE_CATEGORIES = [
   {
     name: "Spoofing",
@@ -278,7 +294,8 @@ type TabId =
   | "threats"
   | "mitigations"
   | "dread"
-  | "dfd";
+  | "dfd"
+  | "safety";
 
 const TABS: {
   id: TabId;
@@ -309,6 +326,12 @@ const TABS: {
     label: "Data Flow",
     icon: Workflow,
     description: "Trust-boundary diagram",
+  },
+  {
+    id: "safety",
+    label: "Safety Metrics",
+    icon: Lock,
+    description: "Posture evaluation",
   },
 ];
 
@@ -353,6 +376,7 @@ export function ThreatModelStudio({
   const [mitigations, setMitigations] = useState<MitigationResult | null>(null);
   const [dreadScores, setDreadScores] = useState<DreadScore[] | null>(null);
   const [dfd, setDfd] = useState<DfdResult | null>(null);
+  const [safetyMetrics, setSafetyMetrics] = useState<SafetyMetricsResult | null>(null);
   // Per-threat current controls -- keyed by threat ID. Session-only state.
   const [currentControls, setCurrentControls] = useState<Record<string, string>>({});
 
@@ -379,6 +403,7 @@ export function ThreatModelStudio({
     setMitigations(null);
     setDreadScores(null);
     setDfd(null);
+    setSafetyMetrics(null);
     setCurrentControls({});
     clearImages();
     // Scroll back to the top of the studio
@@ -594,12 +619,59 @@ export function ThreatModelStudio({
     }
   }, [config, onOpenConfig, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants, images]);
 
-  const hasAnyResult = threatModel || mitigations || dreadScores || dfd;
+  /** Generate Safety Metrics -- evaluates each threat against its current control. */
+  const handleGenerateSafety = useCallback(async () => {
+    if (!requireConfig()) return;
+    if (!threatModel || threatModel.threats.length === 0) {
+      toast.error("Generate a threat model first.");
+      return;
+    }
+    setLoading("safety");
+    setError(null);
+    setActiveTab("safety");
+    try {
+      const res = await fetch("/api/safety-metrics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          config,
+          input: buildInput(),
+          threats: threatModel.threats,
+          currentControls,
+          images: images.length > 0
+            ? images.map((img) => ({ mimeType: img.mimeType, dataUrl: img.dataUrl, name: img.name }))
+            : undefined,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to generate safety metrics");
+      const data: SafetyMetricsResult = await res.json();
+      setSafetyMetrics(data);
+      toast.success("Safety metrics evaluated");
+      setTimeout(
+        () => resultsRef.current?.scrollIntoView({ behavior: "smooth" }),
+        200
+      );
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Unexpected error generating safety metrics";
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setLoading(null);
+    }
+  }, [config, onOpenConfig, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants, images, threatModel, currentControls]);
 
-  // Bundle for Excel export -- single STRIDE sheet, with current controls per threat.
+  const hasAnyResult = threatModel || mitigations || dreadScores || dfd || safetyMetrics;
+
+  // Safety metrics map keyed by threat ID for fast lookup and Excel export
+  const safetyMetricsMap = safetyMetrics
+    ? Object.fromEntries(safetyMetrics.metrics.map((m) => [m.threatId, m]))
+    : undefined;
+
+  // Bundle for Excel export -- single STRIDE sheet with Safety Metrics column.
   const excelBundle: ExcelBundle = {
     threatModel: threatModel ?? undefined,
     currentControls: currentControls,
+    safetyMetrics: safetyMetricsMap,
   };
   const hasExcelContent = !!threatModel;
 
@@ -613,26 +685,53 @@ export function ThreatModelStudio({
               Analysis Workspace
             </h2>
             <p className="text-sm text-neutral-500 mt-1">
-            Describe the system · generate threat models, mitigations, DREAD scores, and data flow diagrams.
+            Describe the system · generate threat models, mitigations, DREAD scores, safety metrics, and data flow diagrams.
             </p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             {hasExcelContent && (
-              <Button
-                size="sm"
-                onClick={() => {
-                  try {
-                    downloadExcel("stride-gpt-report.xlsx", excelBundle);
-                    toast.success("Downloaded stride-gpt-report.xlsx");
-                  } catch {
-                    toast.error("Failed to generate Excel file. Please try again.");
-                  }
-                }}
-                className="rounded-full bg-neutral-900 text-white hover:bg-neutral-800 h-9 px-4"
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5" />
-                Export All as Excel
-              </Button>
+              <>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    try {
+                      downloadExcel("stride-gpt-report.xlsx", excelBundle);
+                      toast.success("Downloaded stride-gpt-report.xlsx");
+                    } catch {
+                      toast.error("Failed to generate Excel file. Please try again.");
+                    }
+                  }}
+                  className="rounded-full bg-neutral-900 text-white hover:bg-neutral-800 h-9 px-4"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  Export Excel
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    try {
+                      const payload = {
+                        threatModel,
+                        currentControls,
+                        safetyMetrics,
+                      };
+                      downloadText(
+                        "stride-gpt-report.json",
+                        JSON.stringify(payload, null, 2),
+                        "application/json"
+                      );
+                      toast.success("Downloaded stride-gpt-report.json");
+                    } catch {
+                      toast.error("Failed to export JSON.");
+                    }
+                  }}
+                  className="rounded-full border-neutral-300 h-9 px-4"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Export JSON
+                </Button>
+              </>
             )}
             <div className="flex items-center gap-3 text-xs text-neutral-400 font-mono">
               <span className="flex items-center gap-1.5">
@@ -847,6 +946,10 @@ export function ThreatModelStudio({
                           return !!dreadScores;
                         case "dfd":
                           return !!dfd;
+                        case "safety":
+                          return !!safetyMetrics;
+                        default:
+                          return false;
                       }
                     })();
                     return (
@@ -922,6 +1025,14 @@ export function ThreatModelStudio({
                       bundle={excelBundle}
                     />
                   )}
+                  {activeTab === "safety" && (
+                    <SafetyMetricsTab
+                      result={safetyMetrics}
+                      loading={loading === "safety"}
+                      onGenerate={handleGenerateSafety}
+                      hasThreats={!!(threatModel && threatModel.threats.length > 0)}
+                    />
+                  )}
                 </motion.div>
               </AnimatePresence>
             </div>
@@ -933,6 +1044,185 @@ export function ThreatModelStudio({
         </div>
       </div>
     </section>
+  );
+}
+
+/* ---------------- Safety Metrics Tab ---------------- */
+
+const verdictConfig: Record<
+  string,
+  { label: string; bg: string; text: string; border: string; dot: string }
+> = {
+  SAFE: {
+    label: "SAFE",
+    bg: "bg-green-50",
+    text: "text-green-800",
+    border: "border-green-200",
+    dot: "bg-green-500",
+  },
+  PARTIALLY_SAFE: {
+    label: "PARTIALLY SAFE",
+    bg: "bg-amber-50",
+    text: "text-amber-800",
+    border: "border-amber-200",
+    dot: "bg-amber-400",
+  },
+  UNSAFE: {
+    label: "UNSAFE",
+    bg: "bg-red-50",
+    text: "text-red-800",
+    border: "border-red-200",
+    dot: "bg-red-500",
+  },
+};
+
+function SafetyMetricsTab({
+  result,
+  loading,
+  onGenerate,
+  hasThreats,
+}: {
+  result: SafetyMetricsResult | null;
+  loading: boolean;
+  onGenerate: () => void;
+  hasThreats: boolean;
+}) {
+  if (loading) return <LoadingBlock label="Evaluating security posture" />;
+
+  if (!result) {
+    return (
+      <Card className="p-12 apple-card text-center">
+        <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-neutral-100 mb-4">
+          <Lock className="w-6 h-6 text-neutral-400" />
+        </div>
+        <h3 className="text-title text-neutral-900 mb-2">Safety Metrics</h3>
+        <p className="text-neutral-500 max-w-md mx-auto mb-2">
+          Evaluate each threat against your existing controls. The AI will assess
+          whether your current security posture is <span className="font-medium text-green-700">SAFE</span>,{" "}
+          <span className="font-medium text-amber-700">PARTIALLY SAFE</span>, or{" "}
+          <span className="font-medium text-red-700">UNSAFE</span> for each identified threat.
+        </p>
+        {!hasThreats && (
+          <p className="text-xs text-neutral-400 mb-6">Generate a threat model first.</p>
+        )}
+        {hasThreats && (
+          <p className="text-xs text-neutral-400 mb-6">
+            Add current controls on threat cards for a more accurate evaluation.
+          </p>
+        )}
+        <Button
+          onClick={onGenerate}
+          disabled={!hasThreats}
+          className="rounded-full bg-neutral-900 text-white hover:bg-neutral-800"
+        >
+          <Lock className="w-4 h-4" />
+          Generate Safety Metrics
+        </Button>
+      </Card>
+    );
+  }
+
+  // Tally verdicts
+  const counts = result.metrics.reduce(
+    (acc, m) => {
+      acc[m.verdict] = (acc[m.verdict] ?? 0) + 1;
+      return acc;
+    },
+    {} as Record<string, number>
+  );
+
+  return (
+    <div className="space-y-6">
+      {/* Overall posture card */}
+      <Card className="p-6 apple-card">
+        <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
+          <div>
+            <h3 className="text-title text-neutral-900 mb-1">Safety Metrics</h3>
+            <p className="text-sm text-neutral-500">
+              Security posture evaluated against existing controls
+            </p>
+          </div>
+          <Button
+            size="sm"
+            onClick={onGenerate}
+            variant="outline"
+            className="rounded-full border-neutral-300"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            Re-evaluate
+          </Button>
+        </div>
+
+        {/* Summary badges */}
+        <div className="flex items-center gap-3 flex-wrap mb-4">
+          {(["SAFE", "PARTIALLY_SAFE", "UNSAFE"] as const).map((v) => {
+            const cfg = verdictConfig[v];
+            const count = counts[v] ?? 0;
+            return (
+              <div
+                key={v}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm font-medium ${cfg.bg} ${cfg.text} ${cfg.border}`}
+              >
+                <span className={`w-2 h-2 rounded-full ${cfg.dot}`} />
+                {count} {cfg.label}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Overall posture text */}
+        <div className="p-4 rounded-xl bg-neutral-50 border border-neutral-200">
+          <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wide mb-2">
+            Overall Security Posture
+          </p>
+          <p className="text-sm text-neutral-700 leading-relaxed">{result.overallPosture}</p>
+        </div>
+      </Card>
+
+      {/* Per-threat metric cards */}
+      <div className="space-y-3">
+        {result.metrics.map((m) => {
+          const cfg = verdictConfig[m.verdict] ?? verdictConfig["UNSAFE"];
+          return (
+            <Card key={m.threatId} className="p-5 apple-card">
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-neutral-400 font-mono">{m.threatId}</span>
+                </div>
+                <span
+                  className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-semibold border ${cfg.bg} ${cfg.text} ${cfg.border} flex-shrink-0`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
+                  {cfg.label}
+                </span>
+              </div>
+
+              <h4 className="text-sm font-semibold text-neutral-900 mb-2 leading-snug">
+                {m.threat}
+              </h4>
+
+              <p className="text-sm text-neutral-600 leading-relaxed mb-3">{m.reasoning}</p>
+
+              {m.gaps.length > 0 && (
+                <div className="mt-2">
+                  <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wide mb-1.5">
+                    Gaps to Address
+                  </p>
+                  <ul className="space-y-1">
+                    {m.gaps.map((gap, i) => (
+                      <li key={i} className="flex items-start gap-2 text-xs text-neutral-700">
+                        <span className="mt-1 w-1 h-1 rounded-full bg-amber-400 flex-shrink-0" />
+                        {gap}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </Card>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

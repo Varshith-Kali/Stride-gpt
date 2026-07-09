@@ -150,7 +150,43 @@ export interface RecommendationResult {
   executiveSummary: string;
 }
 
+/**
+ * Safety evaluation for a single threat, assessed against the user-provided
+ * existing controls. Verdict is one of three states:
+ *   SAFE           — controls fully address the threat
+ *   PARTIALLY_SAFE — controls partially address the threat; gaps remain
+ *   UNSAFE         — controls are absent, insufficient, or bypassed
+ */
+export type SafetyVerdict = "SAFE" | "PARTIALLY_SAFE" | "UNSAFE";
+
+export interface SafetyMetric {
+  /** Threat ID (e.g. "T001") */
+  threatId: string;
+  /** Verbatim threat title from the threat model */
+  threat: string;
+  /** Evaluation verdict */
+  verdict: SafetyVerdict;
+  /**
+   * 2–4 sentence reasoning explaining why the controls are sufficient,
+   * insufficient, or absent. Grounded in the STRIDE category and MITRE ATT&CK
+   * context. Actionable where possible.
+   */
+  reasoning: string;
+  /**
+   * 1–3 specific gaps or improvements the architect should address.
+   * Empty array when verdict is SAFE.
+   */
+  gaps: string[];
+}
+
+export interface SafetyMetricsResult {
+  metrics: SafetyMetric[];
+  /** One-paragraph executive-level summary of the overall security posture. */
+  overallPosture: string;
+}
+
 const SYSTEM_PROMPT = `You are STRIDE GPT, an elite security architect specializing in threat modeling using the STRIDE methodology (Spoofing, Tampering, Repudiation, Information Disclosure, Denial of Service, Elevation of Privilege). You are also an expert in OWASP LLM Top 10, OWASP Agentic AI Top 10 (ASI), MITRE ATT&CK Enterprise, and MITRE ATLAS for ML/AI systems. You produce precise, actionable, structured security analysis.`;
+
 
 function buildContextString(input: ThreatModelInput): string {
   return `APPLICATION CONTEXT:
@@ -1079,5 +1115,110 @@ export async function generateRecommendations(
   return {
     recommendations,
     executiveSummary: clamp(sanitizeText((parsed.executiveSummary as string) ?? ""), 1000),
+  };
+}
+
+/**
+ * Evaluate the current security posture for each threat by comparing the
+ * threat model line items against the user-provided existing controls.
+ *
+ * Each threat receives a verdict of SAFE / PARTIALLY_SAFE / UNSAFE plus
+ * concise reasoning and a list of gaps to address.
+ *
+ * The full application context and any uploaded architecture diagrams are
+ * included so the LLM has maximum signal for an accurate assessment.
+ */
+export async function generateSafetyMetrics(
+  config: LlmConfig,
+  input: ThreatModelInput,
+  threats: import("@/lib/stride-engine").Threat[],
+  /** Per-threat existing controls, keyed by threat ID. May be partial. */
+  currentControls: Record<string, string>,
+  images?: LlmImage[]
+): Promise<SafetyMetricsResult> {
+  if (threats.length === 0) {
+    throw new LlmError("provider", "No threats to evaluate.");
+  }
+
+  const context = buildContextString(input);
+
+  // Build a compact threat + controls summary for each threat
+  const threatControlPairs = threats
+    .map((t) => {
+      const ctrl = (currentControls[t.id] ?? "").trim();
+      return (
+        `[${t.id}] STRIDE: ${t.strideCategory} | Risk: ${t.risk}\n` +
+        `Threat: ${t.threat}\n` +
+        `Description: ${t.description}\n` +
+        `Component: ${t.component}\n` +
+        (t.mitreAttack && t.mitreAttack.length > 0
+          ? `MITRE ATT&CK: ${t.mitreAttack.join(", ")}\n`
+          : "") +
+        `Current Controls: ${ctrl || "NONE PROVIDED"}`
+      );
+    })
+    .join("\n\n---\n\n");
+
+  const prompt =
+    `${context}` +
+    (images && images.length > 0
+      ? `\n- Architecture diagrams: ${images.length} image(s) provided — consider them for control coverage analysis.`
+      : "") +
+    `\n\nTASK: You are a senior principal security architect performing a security posture evaluation. ` +
+    `For EACH threat below, assess whether the listed "Current Controls" adequately mitigate the threat.\n\n` +
+    `Verdict definitions:\n` +
+    `  SAFE           — The controls fully and demonstrably mitigate this specific threat.\n` +
+    `  PARTIALLY_SAFE — Controls exist but leave meaningful gaps, attack surface, or edge cases unaddressed.\n` +
+    `  UNSAFE         — No controls are listed, or the listed controls do not address this threat at all.\n\n` +
+    `Evaluation criteria:\n` +
+    `- Judge against the specific STRIDE category and MITRE ATT&CK technique(s) for this threat.\n` +
+    `- Consider defence-in-depth: a control for one layer does not automatically cover another.\n` +
+    `- Be precise and ruthlessly honest. Err toward PARTIALLY_SAFE over SAFE unless coverage is unambiguous.\n` +
+    `- If no current controls are provided, the verdict MUST be UNSAFE.\n\n` +
+    `THREATS AND CONTROLS:\n${threatControlPairs}\n\n` +
+    `Return ONLY a JSON object (no prose, no markdown fences) with this exact shape:\n` +
+    `{\n` +
+    `  "metrics": [\n` +
+    `    {\n` +
+    `      "threatId": "T001",\n` +
+    `      "threat": "<verbatim threat title>",\n` +
+    `      "verdict": "SAFE" | "PARTIALLY_SAFE" | "UNSAFE",\n` +
+    `      "reasoning": "<2-4 sentence rationale citing the control and the gap>",\n` +
+    `      "gaps": ["<gap 1>", "<gap 2>"]\n` +
+    `    }\n` +
+    `  ],\n` +
+    `  "overallPosture": "<one-paragraph executive summary of the aggregate security posture>"\n` +
+    `}`;
+
+  const raw = await callLLM(config, [buildUserMessage(prompt, images)]);
+
+  const parsed = parseJsonLoose(raw);
+  if (!parsed || !Array.isArray(parsed.metrics)) {
+    throw new LlmError("provider", "Safety metrics response was not valid JSON.");
+  }
+
+  const VERDICTS: SafetyVerdict[] = ["SAFE", "PARTIALLY_SAFE", "UNSAFE"];
+
+  const metrics: SafetyMetric[] = (parsed.metrics as unknown[])
+    .filter((m): m is Record<string, unknown> => !!m && typeof m === "object")
+    .map((m: Record<string, unknown>) => ({
+      threatId: clamp(sanitizeText((m.threatId as string) ?? ""), 10),
+      threat: clamp(sanitizeText((m.threat as string) ?? ""), 200),
+      verdict: VERDICTS.includes(m.verdict as SafetyVerdict)
+        ? (m.verdict as SafetyVerdict)
+        : "UNSAFE",
+      reasoning: clamp(sanitizeText((m.reasoning as string) ?? ""), 600),
+      gaps: Array.isArray(m.gaps)
+        ? (m.gaps as unknown[])
+            .filter((g): g is string => typeof g === "string")
+            .map((g) => clamp(sanitizeText(g), 200))
+            .slice(0, 5)
+        : [],
+    }))
+    .slice(0, 100);
+
+  return {
+    metrics,
+    overallPosture: clamp(sanitizeText((parsed.overallPosture as string) ?? ""), 1000),
   };
 }

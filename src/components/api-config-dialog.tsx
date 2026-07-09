@@ -12,20 +12,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { toast } from "sonner";
 import { Eye, EyeOff, Zap, Check, Loader2, AlertTriangle, ShieldCheck } from "lucide-react";
 import {
   type Provider,
   type LlmConfig,
-  PROVIDER_MODELS,
-  DEFAULT_MODEL,
 } from "@/lib/llm-config";
 
 export function ApiConfigDialog({
@@ -41,7 +32,6 @@ export function ApiConfigDialog({
 }) {
   const provider: Provider = "openai";
   const [apiKey, setApiKey] = useState("");
-  const [model, setModel] = useState(current?.model ?? DEFAULT_MODEL.openai);
   const [showKey, setShowKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<
@@ -54,10 +44,8 @@ export function ApiConfigDialog({
       toast.error("Please enter your OpenAI API key.");
       return;
     }
-    onSave(provider, apiKey.trim(), model);
-    toast.success(
-      `Connected · ${PROVIDER_MODELS.openai.find((m) => m.id === model)?.label ?? model}`
-    );
+    onSave(provider, apiKey.trim(), "gpt-5.5");
+    toast.success("Connected · GPT-5.5");
     onOpenChange(false);
   };
 
@@ -73,7 +61,7 @@ export function ApiConfigDialog({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          config: { provider, apiKey: apiKey.trim(), model },
+          config: { provider, apiKey: apiKey.trim(), model: "gpt-5.5" },
         }),
       });
       const data = await res.json();
@@ -95,7 +83,6 @@ export function ApiConfigDialog({
     }
   };
 
-  const models = PROVIDER_MODELS.openai;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -157,24 +144,13 @@ export function ApiConfigDialog({
             </div>
           </div>
 
-          {/* Model */}
+          {/* Model — fixed to GPT-5.5, displayed as read-only */}
           <div className="space-y-2">
             <Label className="text-xs text-neutral-500">MODEL</Label>
-            <Select value={model} onValueChange={setModel}>
-              <SelectTrigger className="h-11 rounded-xl">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {models.map((m) => (
-                  <SelectItem key={m.id} value={m.id} className="py-2">
-                    <div className="flex flex-col">
-                      <span className="text-sm font-medium">{m.label}</span>
-                      <span className="text-xs text-neutral-500">{m.note}</span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="h-11 rounded-xl border border-neutral-200 bg-neutral-50 px-4 flex items-center justify-between">
+              <span className="text-sm font-medium text-neutral-900">GPT-5.5</span>
+              <span className="text-xs text-neutral-400">Latest · Internal enterprise model</span>
+            </div>
           </div>
         </div>
 

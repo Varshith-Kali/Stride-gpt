@@ -181,3 +181,24 @@ export function validateImages(raw: unknown): LlmImage[] {
     }))
     .slice(0, MAX_IMAGES);
 }
+/**
+ * Validate and sanitize the per-threat current controls map sent by the client.
+ * Keys must be non-empty strings (threat IDs). Values are plain text clamped to
+ * 500 chars. Unknown or malformed entries are dropped silently.
+ */
+export function validateCurrentControls(
+  raw: unknown
+): Record<string, string> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const result: Record<string, string> = {};
+  let count = 0;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (count >= LIMITS.MAX_THREATS) break;
+    if (typeof k !== "string" || k.length === 0 || k.length > LIMITS.THREAT_ID) continue;
+    if (typeof v !== "string") continue;
+    const sanitized = clamp(sanitizeText(v), 500);
+    result[k] = sanitized;
+    count++;
+  }
+  return result;
+}
