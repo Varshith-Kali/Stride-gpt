@@ -1,63 +1,64 @@
 /**
  * Next.js Edge Proxy — per-request security hardening.
  *
- * Runs before every request on the Edge runtime (fastest possible path).
- * In Next.js 16+, this file is named "proxy.ts" (replaces "middleware.ts").
+ * In Next.js 16+, this file is named "proxy.ts" and MUST export a function
+ * named "proxy" (replaces the old "middleware.ts" / "middleware" convention).
  *
  * Responsibilities:
  *   1. Generate a cryptographic nonce for every HTML page response.
  *   2. Thread the nonce into the Content-Security-Policy header so that
- *      Next.js inline scripts are explicitly allowlisted by nonce, rather
- *      than by the blanket 'unsafe-inline' keyword.
- *   3. Expose the nonce via a request header (x-nonce) so layout.tsx can
- *      read it and apply it during SSR.
+ *      Next.js inline scripts are allowlisted by nonce rather than
+ *      the blanket 'unsafe-inline' keyword.
+ *   3. Expose the nonce via x-nonce request header so layout.tsx can
+ *      read it during SSR.
  *
  * Security note:
- *   A nonce-based CSP is strictly stronger than 'unsafe-inline' because:
- *     - Each nonce is a random, single-use 16-byte value (base64-encoded).
- *     - An attacker injecting a <script> tag cannot know the nonce ahead
- *       of time — their script is blocked even if 'unsafe-inline' is absent.
- *   We keep 'unsafe-inline' as a FALLBACK only for browsers that don't
- *   support nonces (very old Safari / IE11). Modern browsers honour the
- *   nonce and ignore 'unsafe-inline' when a nonce is present.
- *
- * References:
- *   https://nextjs.org/docs/app/building-your-application/configuring/content-security-policy
- *   https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy/script-src
+ *   A nonce-based CSP is strictly stronger than 'unsafe-inline':
+ *   - Each nonce is a random, single-use 16-byte value (base64-encoded).
+ *   - An attacker who injects a <script> tag cannot know the nonce —
+ *     their script is blocked even without 'unsafe-inline'.
+ *   We retain 'unsafe-inline' only as a fallback for very old browsers
+ *   (IE11 / ancient Safari). Modern browsers honour the nonce and ignore
+ *   'unsafe-inline' when a valid nonce is present (per CSP Level 2 spec).
  */
 
 import { NextResponse, type NextRequest } from "next/server";
 
 export const config = {
   /**
-   * Run middleware on every route EXCEPT:
-   *   - Static files served from /_next/static/
-   *   - Public assets (/_next/image, /favicon.ico, /icon.*)
-   * API routes (/api/*) also receive the nonce for response tracing,
-   * but the CSP header only matters for HTML pages.
+   * Run on every route EXCEPT:
+   *   - Static files: /_next/static/
+   *   - Image optimisation: /_next/image
+   *   - Public assets: favicon, icon, robots, sitemap
    */
   matcher: [
     "/((?!_next/static|_next/image|favicon\\.ico|icon\\.|robots\\.txt|sitemap\\.xml).*)",
   ],
 };
 
-export function middleware(req: NextRequest): NextResponse {
-  // --- 1. Generate a cryptographic nonce --------------------------------
-  // 16 random bytes → 22-char base64url string. Unpredictable per request.
-  const nonce = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("base64");
+/**
+ * Next.js 16 proxy handler.
+ * MUST be exported as "proxy" — this is the new convention enforced by Next.js 16.
+ */
+export function proxy(req: NextRequest): NextResponse {
+  // 1. Generate a cryptographic nonce — 16 random bytes, base64-encoded.
+  //    Unique and unpredictable per request.
+  const nonce = Buffer.from(
+    crypto.getRandomValues(new Uint8Array(16))
+  ).toString("base64");
 
-  // --- 2. Build the nonce-hardened CSP ----------------------------------
+  // 2. Build the nonce-hardened Content-Security-Policy.
   const csp = [
     "default-src 'self'",
-    // Nonce allowlists Next.js inline scripts explicitly.
-    // 'unsafe-inline' is kept as a fallback for browsers without nonce support —
-    // modern browsers ignore it when a valid nonce is present.
+    // Nonce explicitly allowlists Next.js runtime inline scripts.
+    // 'unsafe-inline' is a fallback for browsers that don't support nonces;
+    // modern browsers ignore it when a nonce is present (CSP Level 2+).
     `script-src 'self' 'nonce-${nonce}' 'unsafe-inline'`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: blob:",
-    // connect-src: 'self' only — the browser NEVER calls OpenAI directly.
-    // All LLM calls are made server-side via /api/* routes.
+    // connect-src: browser never contacts OpenAI — all LLM calls are
+    // server-side via Next.js API routes. 'self' is sufficient.
     "connect-src 'self'",
     "frame-ancestors 'none'",
     "object-src 'none'",
@@ -65,9 +66,8 @@ export function middleware(req: NextRequest): NextResponse {
     "form-action 'self'",
   ].join("; ");
 
-  // --- 3. Clone request headers with nonce for SSR ----------------------
-  // Next.js layout.tsx can read x-nonce to set the nonce attribute on
-  // <script> tags rendered server-side.
+  // 3. Inject the nonce into the request headers so layout.tsx can read
+  //    it server-side during SSR to set nonce on rendered script tags.
   const requestHeaders = new Headers(req.headers);
   requestHeaders.set("x-nonce", nonce);
 
@@ -75,11 +75,8 @@ export function middleware(req: NextRequest): NextResponse {
     request: { headers: requestHeaders },
   });
 
-  // --- 4. Set security headers on the response --------------------------
+  // 4. Set the CSP response header.
   res.headers.set("Content-Security-Policy", csp);
-
-  // x-nonce is exposed to the SSR layer only — never sent to the browser.
-  // (It's set on the request headers, not the response headers.)
 
   return res;
 }
