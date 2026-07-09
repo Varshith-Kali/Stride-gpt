@@ -330,9 +330,11 @@ const riskColor = (risk: string) => {
 export function ThreatModelStudio({
   config,
   onOpenConfig,
+  onReset,
 }: {
   config: import("@/lib/llm-config").LlmConfig | null;
   onOpenConfig: () => void;
+  onReset?: (resetFn: () => void) => void;
 }) {
   const [appName, setAppName] = useState("");
   const [appType, setAppType] = useState<AppType>("Web application");
@@ -358,6 +360,35 @@ export function ThreatModelStudio({
   const { images, addFiles, removeImage, clearAll: clearImages, isFull } = useImageUpload();
 
   const resultsRef = useRef<HTMLDivElement>(null);
+
+  /** Reset ALL analysis state — form fields + results + controls + images.
+   *  API key is intentionally NOT touched (session-only, cleared only on tab close/refresh). */
+  const resetStudio = useCallback(() => {
+    setAppName("");
+    setAppType("Web application");
+    setDescription("");
+    setAuthentication(["JWT"]);
+    setInternetFacing(true);
+    setSensitiveData(true);
+    setUsesCloud(true);
+    setHasMultipleTenants(false);
+    setActiveTab("threats");
+    setLoading(null);
+    setError(null);
+    setThreatModel(null);
+    setMitigations(null);
+    setDreadScores(null);
+    setDfd(null);
+    setCurrentControls({});
+    clearImages();
+    // Scroll back to the top of the studio
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [clearImages]);
+
+  // Register reset function with parent so NavBar can trigger it
+  useEffect(() => {
+    onReset?.(resetStudio);
+  }, [onReset, resetStudio]);
 
   const loadExample = (idx: number) => {
     const ex = EXAMPLE_APPS[idx];

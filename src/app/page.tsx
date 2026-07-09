@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
-import { Settings, Zap, Check } from "lucide-react";
+import { Settings, Zap, Check, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThreatModelStudio } from "@/components/threat-model-studio";
 import { BrandMark } from "@/components/brand-mark";
@@ -15,15 +15,32 @@ export default function Page() {
   const { config, save } = useLLMConfig();
   const [configOpen, setConfigOpen] = useState(false);
 
+  // resetRef holds the reset function registered by ThreatModelStudio.
+  // Using a ref avoids unnecessary re-renders on the parent.
+  const resetRef = useRef<(() => void) | null>(null);
+
+  const handleReset = useCallback((fn: () => void) => {
+    resetRef.current = fn;
+  }, []);
+
+  const triggerReset = useCallback(() => {
+    resetRef.current?.();
+  }, []);
+
   return (
     <main className="min-h-screen flex flex-col bg-background">
       <NavBar
         configured={!!config}
         providerLabel={config ? providerLabel(config.provider, config.model) : null}
         onOpenConfig={() => setConfigOpen(true)}
+        onNewAnalysis={triggerReset}
       />
       <CompactHero />
-      <ThreatModelStudio config={config} onOpenConfig={() => setConfigOpen(true)} />
+      <ThreatModelStudio
+        config={config}
+        onOpenConfig={() => setConfigOpen(true)}
+        onReset={handleReset}
+      />
       <Footer />
       <ApiConfigDialog
         open={configOpen}
@@ -46,18 +63,38 @@ function NavBar({
   configured,
   providerLabel,
   onOpenConfig,
+  onNewAnalysis,
 }: {
   configured: boolean;
   providerLabel: string | null;
   onOpenConfig: () => void;
+  onNewAnalysis: () => void;
 }) {
   const [scrolled, setScrolled] = useState(false);
+  // "done" flash — shows a brief checkmark after reset completes
+  const [justReset, setJustReset] = useState(false);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
+
+  // Clean up the flash timer on unmount
+  useEffect(() => {
+    return () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    };
+  }, []);
+
+  const handleNewAnalysis = () => {
+    onNewAnalysis();
+    setJustReset(true);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setJustReset(false), 1800);
+  };
 
   return (
     <header
@@ -79,6 +116,7 @@ function NavBar({
         </Link>
 
         <div className="flex items-center gap-2">
+          {/* API config button */}
           <button
             onClick={onOpenConfig}
             className={`inline-flex items-center gap-1.5 h-9 px-3 rounded-full text-xs font-medium transition-all border ${
@@ -101,14 +139,30 @@ function NavBar({
               </>
             )}
           </button>
-          <a href="#studio">
-            <Button
-              size="sm"
-              className="rounded-full bg-neutral-900 text-white hover:bg-neutral-800 h-9 px-4"
-            >
-              New Analysis
-            </Button>
-          </a>
+
+          {/* New Analysis button — resets all form + results, preserves API key */}
+          <Button
+            size="sm"
+            onClick={handleNewAnalysis}
+            className={`rounded-full h-9 px-4 transition-all duration-300 ${
+              justReset
+                ? "bg-green-700 hover:bg-green-700 text-white"
+                : "bg-neutral-900 hover:bg-neutral-800 text-white"
+            }`}
+            title="Clear all analysis data and start fresh (API key is preserved)"
+          >
+            {justReset ? (
+              <>
+                <Check className="w-3.5 h-3.5" />
+                <span>Cleared</span>
+              </>
+            ) : (
+              <>
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>New Analysis</span>
+              </>
+            )}
+          </Button>
         </div>
       </div>
     </header>
