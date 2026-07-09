@@ -54,6 +54,9 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: false,
   },
 
+  // Hide the Next.js dev-mode floating indicator (the "N" badge).
+  devIndicators: false,
+
   // HTTP security headers applied to all routes.
   async headers() {
     return [
