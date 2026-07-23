@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { DEFAULT_MODEL } from "@/lib/llm-config";
-import { readJsonRequest, handleError } from "@/lib/api-utils";
+import { readJsonRequest, handleError, checkRateLimit } from "@/lib/api-utils";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -22,6 +22,9 @@ export const maxDuration = 30;
  * - It is never returned to the client, logged, or stored.
  */
 export async function POST(req: NextRequest) {
+  const rateLimitError = checkRateLimit(req);
+  if (rateLimitError) return rateLimitError;
+
   try {
     const parsed = await readJsonRequest<{
       config?: { provider?: string; apiKey?: string; model?: string };
@@ -35,7 +38,7 @@ export async function POST(req: NextRequest) {
       if (
         rawConfig?.provider === "openai" &&
         typeof rawConfig?.apiKey === "string" &&
-        rawConfig.apiKey.trim().length >= 10
+        rawConfig.apiKey.trim().length >= 40
       ) {
         config = {
           provider: "openai",

@@ -28,37 +28,17 @@ const securityHeaders = [
   // ── Cross-Origin isolation (Spectre / side-channel mitigation) ───────────
   // COOP: prevents other windows from acquiring a reference to this window.
   { key: "Cross-Origin-Opener-Policy",   value: "same-origin" },
-  // COEP: blocks cross-origin resources unless they opt in via CORP/CORS.
-  { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
+  // COEP: credentialless is less strict than require-corp but still prevents
+  // Spectre-style side-channel attacks against cross-origin resources.
+  // require-corp breaks cross-origin fonts/scripts that lack CORP headers.
+  { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
   // CORP: prevents other origins from reading this resource.
   { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
 
-  // ── Content-Security-Policy ──────────────────────────────────────────────
-  // Key decisions:
-  //   script-src: 'unsafe-eval' REMOVED — not needed in production Next.js.
-  //               'unsafe-inline' still required for Next.js hydration.
-  //   connect-src: https://api.openai.com REMOVED — all LLM calls are made
-  //               server-side via Next.js API routes. The browser NEVER
-  //               contacts OpenAI directly, so allowing it client-side was
-  //               an unnecessary attack surface (and would expose the API key
-  //               flow if the app were ever misconfigured).
-  //   img-src:    data: + blob: retained for base64 image previews in the
-  //               upload zone.
-  {
-    key: "Content-Security-Policy",
-    value: [
-      "default-src 'self'",
-      "script-src 'self' 'unsafe-inline'",
-      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-      "font-src 'self' https://fonts.gstatic.com",
-      "img-src 'self' data: blob:",
-      "connect-src 'self'",
-      "frame-ancestors 'none'",
-      "object-src 'none'",
-      "base-uri 'self'",
-      "form-action 'self'",
-    ].join("; "),
-  },
+  // NOTE: Content-Security-Policy is intentionally NOT set here.
+  // It is generated per-request with a fresh cryptographic nonce in
+  // src/proxy.ts. A static CSP here would override the nonce-based one
+  // on some routes, defeating the nonce-based XSS mitigation.
 ];
 
 const nextConfig: NextConfig = {

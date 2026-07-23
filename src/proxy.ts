@@ -78,5 +78,9 @@ export function proxy(req: NextRequest): NextResponse {
   // 4. Set the CSP response header.
   res.headers.set("Content-Security-Policy", csp);
 
+  // 5. Set a per-request trace ID — lets users report issues precisely
+  //    without exposing server internals. Logged at the app layer.
+  res.headers.set("X-Request-ID", crypto.randomUUID());
+
   return res;
 }

@@ -4,6 +4,7 @@ import {
   readJsonRequest,
   configRequiredError,
   handleError,
+  checkRateLimit,
 } from "@/lib/api-utils";
 import {
   validateThreatModelInput,
@@ -17,6 +18,9 @@ export const runtime = "nodejs";
 export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
+  const rateLimitError = checkRateLimit(req);
+  if (rateLimitError) return rateLimitError;
+
   try {
     const parsed = await readJsonRequest<{
       input?: unknown;

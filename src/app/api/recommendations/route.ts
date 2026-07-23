@@ -5,6 +5,7 @@ import {
   readJsonRequest,
   configRequiredError,
   handleError,
+  checkRateLimit,
 } from "@/lib/api-utils";
 import { sanitizeThreats, validateImages, sanitizeText, clamp } from "@/lib/validation";
 
@@ -12,6 +13,9 @@ export const runtime = "nodejs";
 export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
+  const rateLimitError = checkRateLimit(req);
+  if (rateLimitError) return rateLimitError;
+
   try {
     const parsed = await readJsonRequest<{
       threats?: unknown;
@@ -64,7 +68,7 @@ export async function POST(req: NextRequest) {
     const raw = data.appInput as Record<string, unknown>;
     const appInput = {
       appName: typeof raw.appName === "string" ? clamp(sanitizeText(raw.appName), 200) : "",
-      appType: typeof raw.appType === "string" ? raw.appType : "Web application",
+      appType: (["Web application","Mobile application","Desktop application","Cloud service/API","IoT device","Generative AI application","Agentic AI application","Microservice architecture","Other"] as const).includes(raw.appType as never) ? (raw.appType as import("@/lib/stride-engine").AppType) : "Web application",
       description:
         typeof raw.description === "string"
           ? clamp(sanitizeText(raw.description), 8000)

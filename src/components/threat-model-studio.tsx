@@ -371,6 +371,8 @@ export function ThreatModelStudio({
   const [activeTab, setActiveTab] = useState<TabId>("threats");
   const [loading, setLoading] = useState<TabId | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Streaming progress — chars received from SSE stream during threat model generation
+  const [streamProgress, setStreamProgress] = useState(0);
 
   const [threatModel, setThreatModel] = useState<ThreatModelResult | null>(null);
   const [mitigations, setMitigations] = useState<MitigationResult | null>(null);
@@ -463,6 +465,8 @@ export function ThreatModelStudio({
     setLoading("threats");
     setError(null);
     setActiveTab("threats");
+    setStreamProgress(0);
+
     try {
       const res = await fetch("/api/threat-model", {
         method: "POST",
@@ -476,19 +480,62 @@ export function ThreatModelStudio({
             : undefined,
         }),
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || "Failed to generate threat model");
+
+      if (!res.ok || !res.body) {
+        const err = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(err.error || `Failed to generate threat model (${res.status})`);
       }
-      const data: ThreatModelResult = await res.json();
-      setThreatModel(data);
+
+      // ─── Read the SSE stream ──────────────────────────────────────────
+      // The route sends `data: {...}\n\n` events:
+      //   { type: "progress", chars: N }  — live token counter
+      //   { type: "done",     data: {...} } — final parsed result
+      //   { type: "error",    message: "..." } — LLM error
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let lineBuffer = "";
+      let finalResult: ThreatModelResult | null = null;
+
+      outer: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        lineBuffer += decoder.decode(value, { stream: true });
+        // SSE events are delimited by double newlines
+        const parts = lineBuffer.split("\n\n");
+        lineBuffer = parts.pop() ?? "";
+
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+
+          let evt: { type: string; chars?: number; data?: ThreatModelResult; message?: string };
+          try { evt = JSON.parse(payload) as typeof evt; } catch { continue; }
+
+          if (evt.type === "progress" && typeof evt.chars === "number") {
+            setStreamProgress(evt.chars);
+          } else if (evt.type === "done" && evt.data) {
+            finalResult = evt.data;
+            break outer;
+          } else if (evt.type === "error") {
+            throw new Error(evt.message || "Failed to generate threat model");
+          }
+        }
+      }
+
+      if (!finalResult) {
+        throw new Error("Threat model generation completed but returned no result.");
+      }
+
+      setThreatModel(finalResult);
       // Reset downstream artifacts and current controls on new threat model
       setMitigations(null);
       setDreadScores(null);
       setDfd(null);
       setCurrentControls({});
       toast.success(
-        `Identified ${data.threats.length} threats across STRIDE categories`
+        `Identified ${finalResult.threats.length} threats across STRIDE categories`
       );
       setTimeout(
         () => resultsRef.current?.scrollIntoView({ behavior: "smooth" }),
@@ -500,8 +547,10 @@ export function ThreatModelStudio({
       toast.error(msg);
     } finally {
       setLoading(null);
+      setStreamProgress(0);
     }
   }, [config, onOpenConfig, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants, images]);
+
 
   const generateMitigations = useCallback(async () => {
     if (!requireConfig()) return;
@@ -525,7 +574,10 @@ export function ThreatModelStudio({
             : undefined,
         }),
       });
-      if (!res.ok) throw new Error("Failed to generate mitigations");
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(errBody.error || `Failed to generate mitigations (${res.status})`);
+      }
       const data: MitigationResult = await res.json();
       setMitigations(data);
       toast.success(`Generated ${data.mitigations.length} mitigations`);
@@ -564,7 +616,10 @@ export function ThreatModelStudio({
             : undefined,
         }),
       });
-      if (!res.ok) throw new Error("Failed to generate DREAD scores");
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(errBody.error || `Failed to generate DREAD scores (${res.status})`);
+      }
       const data: DreadScore[] = await res.json();
       setDreadScores(data);
       toast.success("DREAD risk scores computed");
@@ -602,7 +657,10 @@ export function ThreatModelStudio({
             : undefined,
         }),
       });
-      if (!res.ok) throw new Error("Failed to generate DFD");
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(errBody.error || `Failed to generate DFD (${res.status})`);
+      }
       const data: DfdResult = await res.json();
       setDfd(data);
       toast.success("Data flow diagram generated");
@@ -643,7 +701,10 @@ export function ThreatModelStudio({
             : undefined,
         }),
       });
-      if (!res.ok) throw new Error("Failed to generate safety metrics");
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(errBody.error || `Failed to generate safety metrics (${res.status})`);
+      }
       const data: SafetyMetricsResult = await res.json();
       setSafetyMetrics(data);
       toast.success("Safety metrics evaluated");
@@ -1002,6 +1063,7 @@ export function ThreatModelStudio({
                     <ThreatsTab
                       result={threatModel}
                       loading={loading === "threats"}
+                      streamProgress={streamProgress}
                       onNext={generateMitigations}
                       onDread={generateDread}
                       currentControls={currentControls}
@@ -1288,6 +1350,7 @@ function EmptyState() {
 function ThreatsTab({
   result,
   loading,
+  streamProgress,
   onNext,
   onDread,
   currentControls,
@@ -1296,13 +1359,15 @@ function ThreatsTab({
 }: {
   result: ThreatModelResult | null;
   loading: boolean;
+  /** Chars received from SSE stream so far — 0 when not streaming. */
+  streamProgress?: number;
   onNext: () => void;
   onDread: () => void;
   currentControls: Record<string, string>;
   onCurrentControlsChange: (id: string, val: string) => void;
   bundle: ExcelBundle;
 }) {
-  if (loading) return <LoadingBlock label="Identifying STRIDE threats" />;
+  if (loading) return <LoadingBlock label="Identifying STRIDE threats" progress={streamProgress} />;
   if (!result) return null;
 
   const counts = STRIDE_CATEGORIES.map((c) => ({
@@ -2170,15 +2235,31 @@ function CopyMermaidBar({ source }: { source: string }) {
   );
 }
 
-function LoadingBlock({ label }: { label: string }) {
+function LoadingBlock({ label, progress }: { label: string; progress?: number }) {
+  const hasProgress = typeof progress === "number" && progress > 0;
   return (
     <Card className="p-12 apple-card">
       <div className="flex flex-col items-center justify-center text-center">
         <Loader2 className="w-8 h-8 animate-spin text-neutral-900 mb-4" />
         <p className="text-sm font-medium text-neutral-900">{label}...</p>
-        <p className="text-xs text-neutral-500 mt-1">
-          The AI agent is reasoning through your application.
-        </p>
+        {hasProgress ? (
+          <div className="mt-2 flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-neutral-900 animate-pulse" />
+            <p className="text-xs text-neutral-500">
+              Receiving{" "}
+              <span className="font-mono font-medium text-neutral-700">
+                {progress! >= 1000
+                  ? `${(progress! / 1000).toFixed(1)}k`
+                  : progress}
+              </span>{" "}
+              chars
+            </p>
+          </div>
+        ) : (
+          <p className="text-xs text-neutral-500 mt-1">
+            The AI agent is reasoning through your application.
+          </p>
+        )}
       </div>
     </Card>
   );

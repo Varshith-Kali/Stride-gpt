@@ -1,12 +1,10 @@
-import * as React from "react";
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
-import { headers } from "next/headers";
 import "./globals.css";
-import { Toaster } from "@/components/ui/toaster";
-import { Toaster as SonnerToaster } from "@/components/ui/sonner";
+import { Toaster } from "@/components/ui/sonner";
 
-
+// ─── Fonts ────────────────────────────────────────────────────────────────────
+// `display: "swap"` prevents FOIT (invisible text during font load).
 const inter = Inter({
   variable: "--font-sans",
   subsets: ["latin"],
@@ -19,6 +17,7 @@ const jetbrainsMono = JetBrains_Mono({
   display: "swap",
 });
 
+// ─── SEO Metadata ─────────────────────────────────────────────────────────────
 export const metadata: Metadata = {
   title: "STRIDE GPT — AI-Powered Threat Modeling",
   description:
@@ -43,30 +42,23 @@ export const metadata: Metadata = {
   },
 };
 
-export default async function RootLayout({
+// ─── Root Layout ──────────────────────────────────────────────────────────────
+// CSP nonce is generated in src/proxy.ts per-request and threaded into all
+// Next.js-injected scripts automatically via the x-nonce request header.
+// No layout-level nonce handling is required.
+export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  /**
-   * Read the per-request CSP nonce injected by src/proxy.ts.
-   * The nonce is set on the *request* headers (not response) so it is
-   * available here during SSR and is never sent to the browser directly.
-   * Next.js uses it to allowlist inline scripts by nonce rather than
-   * relying solely on the blanket 'unsafe-inline' keyword.
-   */
-  const headersList = await headers();
-  const nonce = headersList.get("x-nonce") ?? undefined;
-
   return (
     <html lang="en" suppressHydrationWarning>
       <body
         className={`${inter.variable} ${jetbrainsMono.variable} font-sans antialiased bg-background text-foreground`}
-        {...(nonce ? { "data-nonce": nonce } : {})}
       >
         {children}
+        {/* Sonner toast notifications — the only toast system in use. */}
         <Toaster />
-        <SonnerToaster />
       </body>
     </html>
   );

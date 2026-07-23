@@ -6,6 +6,72 @@ import { LlmError } from "@/lib/stride-engine";
  *  Image validation (count, size, MIME) happens inside the route handler. */
 const MAX_BODY_BYTES = 20_971_520; // 20 MB
 
+// ─── In-memory sliding-window rate limiter ────────────────────────────────────
+// 20 API calls per minute per IP. Simple and dependency-free for a single-
+// instance Next.js app. Does not persist across restarts (acceptable — the
+// goal is abuse prevention, not forensics).
+const RATE_LIMIT_WINDOW_MS   = 60_000; // 1 minute
+const RATE_LIMIT_MAX_REQUESTS = 20;    // per window per IP
+
+interface RateWindow { timestamps: number[] }
+const rateStore = new Map<string, RateWindow>();
+
+// Periodic cleanup — remove windows that haven't been touched in > 10 min.
+// Prevents unbounded memory growth in long-running deployments.
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, w] of rateStore) {
+    if (now - (w.timestamps.at(-1) ?? 0) > RATE_LIMIT_WINDOW_MS * 10) {
+      rateStore.delete(ip);
+    }
+  }
+}, 10 * 60_000);
+
+/**
+ * Check rate limit for the given IP.
+ * Returns a 429 NextResponse if the limit is exceeded, or null if OK.
+ */
+export function checkRateLimit(req: NextRequest): NextResponse | null {
+  // Best-effort IP extraction — works for direct clients and behind most
+  // standard reverse proxies. Falls back to "unknown" (still counted).
+  const ip =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    req.headers.get("x-real-ip") ??
+    "unknown";
+
+  const now = Date.now();
+  const window = rateStore.get(ip) ?? { timestamps: [] };
+
+  // Evict timestamps outside the current window
+  window.timestamps = window.timestamps.filter(
+    (t) => now - t < RATE_LIMIT_WINDOW_MS
+  );
+
+  if (window.timestamps.length >= RATE_LIMIT_MAX_REQUESTS) {
+    rateStore.set(ip, window);
+    return NextResponse.json(
+      {
+        error: `Rate limit exceeded. Maximum ${RATE_LIMIT_MAX_REQUESTS} requests per minute.`,
+        retryAfter: Math.ceil(RATE_LIMIT_WINDOW_MS / 1000),
+      },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": String(Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)),
+          "X-RateLimit-Limit": String(RATE_LIMIT_MAX_REQUESTS),
+          "X-RateLimit-Remaining": "0",
+        },
+      }
+    );
+  }
+
+  window.timestamps.push(now);
+  rateStore.set(ip, window);
+  return null; // OK — not rate limited
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * Safely parse a JSON request body with size and content-type guards.
  * Returns `{ ok: false, error }` on any failure, or `{ ok: true, data, config }`
@@ -84,6 +150,7 @@ export async function readJsonRequest<T = unknown>(
 
 /**
  * Standard error response for a missing or invalid LLM config.
+ * 401 — the request lacks valid credentials/configuration.
  */
 export function configRequiredError(): NextResponse {
   return NextResponse.json(
@@ -91,7 +158,7 @@ export function configRequiredError(): NextResponse {
       error:
         "LLM provider not configured. Open Settings and enter your OpenAI API key.",
     },
-    { status: 400 }
+    { status: 401 }
   );
 }
 
