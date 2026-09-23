@@ -33,6 +33,16 @@
 
 ---
 
+<div align="center">
+
+<img src="public/screenshot.png" alt="STRIDE GPT — Analysis Workspace" width="100%" style="border-radius:12px;border:1px solid #e5e7eb;" />
+
+*Analysis Workspace — describe your system, upload an architecture diagram, and generate a complete threat model in seconds.*
+
+</div>
+
+---
+
 ## Table of Contents
 
 - [Overview](#overview)
