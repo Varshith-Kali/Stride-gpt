@@ -2,7 +2,7 @@
 
 <br />
 
-<img src="public/placeholder.svg" alt="STRIDE GPT Shield" width="64" height="64" style="border-radius:14px" />
+<img src="public/logo.svg" alt="STRIDE GPT Logo" width="64" height="64" style="border-radius:14px" />
 
 <br /><br />
 
