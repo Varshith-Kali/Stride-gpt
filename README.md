@@ -1,10 +1,5 @@
 <div align="center">
 
-<br />
-
-<img src="public/logo.svg" alt="STRIDE GPT Logo" width="64" height="64" style="border-radius:14px" />
-
-<br /><br />
 
 # STRIDE GPT
 
