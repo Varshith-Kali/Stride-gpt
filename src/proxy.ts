@@ -48,12 +48,16 @@ export function proxy(req: NextRequest): NextResponse {
   ).toString("base64");
 
   // 2. Build the nonce-hardened Content-Security-Policy.
+  //    In development, React requires 'unsafe-eval' for source-map
+  //    reconstruction and call-stack debugging. It is never used in production.
+  const isDev = process.env.NODE_ENV === "development";
   const csp = [
     "default-src 'self'",
     // Nonce explicitly allowlists Next.js runtime inline scripts.
     // 'unsafe-inline' is a fallback for browsers that don't support nonces;
     // modern browsers ignore it when a nonce is present (CSP Level 2+).
-    `script-src 'self' 'nonce-${nonce}' 'unsafe-inline'`,
+    // 'unsafe-eval' is dev-only — React drops it entirely in production builds.
+    `script-src 'self' 'nonce-${nonce}' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: blob:",
