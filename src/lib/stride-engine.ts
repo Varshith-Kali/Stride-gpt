@@ -1,4 +1,4 @@
-﻿/**
+/**
  * STRIDE GPT ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Threat modeling engine.
  * Calls the OpenAI Responses API (POST /v1/responses) using the user-provided
  * API key. The key is passed server-side only ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never stored or logged.
@@ -226,7 +226,6 @@ function buildContextString(input: ThreatModelInput): string {
  * typed functions without explicit narrowing. Array results (e.g. DREAD)
  * are accessed at call sites via `parsed as unknown[]`.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseJsonLoose(text: string): Record<string, any> | null {
   // Strip code fences and leading/trailing whitespace
   const cleaned = text.replace(/```json\s*/gi, "").replace(/```\s*$/g, "").trim();
@@ -711,7 +710,7 @@ async function* callLLMStream(
 
   try {
     outer: while (true) {
-      let chunk: ReadableStreamReadResult<Uint8Array>;
+      let chunk: Awaited<ReturnType<typeof reader.read>>;
       try {
         chunk = await reader.read();
       } catch (e: unknown) {

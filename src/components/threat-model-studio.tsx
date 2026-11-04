@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useMemo, useDeferredValue } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo, useDeferredValue, type DragEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Shield,
@@ -745,21 +745,21 @@ export function ThreatModelStudio({
   const hasExcelContent = !!threatModel;
 
   return (
-    <section id="studio" className="relative pt-2 pb-4 sm:pt-3 sm:pb-6 flex-1">
+    <section id="studio" className="relative pt-2 pb-6 sm:pt-3 sm:pb-10 flex-1 overflow-x-clip">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         {/* Tool header */}
-        <div className="flex items-end justify-between gap-4 mb-6 flex-wrap">
-          <div>
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 sm:gap-4 mb-5 sm:mb-6">
+          <div className="min-w-0">
             <h2 className="text-title text-neutral-900">
               Analysis Workspace
             </h2>
-            <p className="text-sm text-neutral-500 mt-1">
-            Describe the system · generate threat models, mitigations, DREAD scores, safety metrics, and data flow diagrams.
+            <p className="text-xs sm:text-sm text-neutral-500 mt-1 leading-relaxed">
+              Describe the system · generate threat models, mitigations, DREAD scores, safety metrics, and data flow diagrams.
             </p>
           </div>
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-3 flex-wrap shrink-0">
             {hasExcelContent && (
-              <>
+              <div className="flex items-center gap-2 flex-wrap">
                 <Button
                   size="sm"
                   onClick={() => {
@@ -770,9 +770,9 @@ export function ThreatModelStudio({
                       toast.error("Failed to generate Excel file. Please try again.");
                     }
                   }}
-                  className="rounded-full bg-neutral-900 text-white hover:bg-neutral-800 h-9 px-4"
+                  className="rounded-full bg-neutral-900 text-white hover:bg-neutral-800 h-9 px-3.5 sm:px-4 text-xs sm:text-sm whitespace-nowrap"
                 >
-                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
                   Export Excel
                 </Button>
                 <Button
@@ -795,37 +795,37 @@ export function ThreatModelStudio({
                       toast.error("Failed to export JSON.");
                     }
                   }}
-                  className="rounded-full border-neutral-300 h-9 px-4"
+                  className="rounded-full border-neutral-300 h-9 px-3.5 sm:px-4 text-xs sm:text-sm whitespace-nowrap"
                 >
-                  <Download className="w-3.5 h-3.5" />
+                  <Download className="w-3.5 h-3.5 shrink-0" />
                   Export JSON
                 </Button>
-              </>
+              </div>
             )}
-            <div className="flex items-center gap-3 text-xs text-neutral-400 font-mono">
-              <span className="flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-neutral-900" />
+            <div className="flex items-center gap-2 sm:gap-3 text-[11px] sm:text-xs text-neutral-400 font-mono flex-wrap">
+              <span className="flex items-center gap-1.5 whitespace-nowrap">
+                <span className="w-1.5 h-1.5 rounded-full bg-neutral-900 shrink-0" />
                 STRIDE
               </span>
               <span className="text-neutral-300">|</span>
-              <span>OWASP LLM/ASI</span>
+              <span className="whitespace-nowrap">OWASP LLM/ASI</span>
               <span className="text-neutral-300">|</span>
-              <span>MITRE ATT&CK</span>
+              <span className="whitespace-nowrap">MITRE ATT&CK</span>
             </div>
           </div>
         </div>
 
         {/* Input panel */}
-        <Card className="p-6 sm:p-8 apple-card">
-          <div className="grid lg:grid-cols-5 gap-8">
+        <Card className="p-4 sm:p-6 lg:p-8 apple-card">
+          <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 lg:gap-8">
             {/* Left: form */}
-            <div className="lg:col-span-3 space-y-6">
-              <div className="flex items-center justify-between flex-wrap gap-3">
-                <h3 className="text-title text-neutral-900">
+            <div className="lg:col-span-3 space-y-5 sm:space-y-6 min-w-0">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
+                <h3 className="text-title text-neutral-900 shrink-0">
                   Application Profile
                 </h3>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-neutral-500 hidden sm:inline">
+                <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                  <span className="text-xs text-neutral-500 mr-0.5">
                     Try:
                   </span>
                   {EXAMPLE_APPS.map((ex, i) => (
@@ -834,7 +834,7 @@ export function ThreatModelStudio({
                       variant="outline"
                       size="sm"
                       onClick={() => loadExample(i)}
-                      className="h-7 px-3 text-xs rounded-full"
+                      className="h-7 px-2.5 sm:px-3 text-xs rounded-full whitespace-nowrap"
                     >
                       {ex.label}
                     </Button>
@@ -842,8 +842,8 @@ export function ThreatModelStudio({
                 </div>
               </div>
 
-              <div className="grid sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2 min-w-0">
                   <Label htmlFor="appName" className="text-xs text-neutral-500">
                     Application name
                   </Label>
@@ -852,10 +852,10 @@ export function ThreatModelStudio({
                     value={appName}
                     onChange={(e) => setAppName(e.target.value)}
                     placeholder="e.g. PayWave"
-                    className="h-11 rounded-xl"
+                    className="h-11 rounded-xl w-full"
                   />
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-2 min-w-0">
                   <Label className="text-xs text-neutral-500">
                     Application type
                   </Label>
@@ -863,7 +863,7 @@ export function ThreatModelStudio({
                     value={appType}
                     onValueChange={(v) => setAppType(v as AppType)}
                   >
-                    <SelectTrigger className="h-11 rounded-xl">
+                    <SelectTrigger className="w-full !h-11 rounded-xl">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -936,52 +936,54 @@ export function ThreatModelStudio({
             </div>
 
             {/* Right: toggles + CTA */}
-            <div className="lg:col-span-2 space-y-4">
+            <div className="lg:col-span-2 space-y-4 min-w-0">
               <h3 className="text-title text-neutral-900">Architecture</h3>
-              <ToggleRow
-                icon={Globe}
-                label="Internet-facing"
-                description="Publicly accessible entry points"
-                checked={internetFacing}
-                onCheckedChange={setInternetFacing}
-              />
-              <ToggleRow
-                icon={Lock}
-                label="Processes sensitive data"
-                description="PII, PHI, PCI, credentials, etc."
-                checked={sensitiveData}
-                onCheckedChange={setSensitiveData}
-              />
-              <ToggleRow
-                icon={Cloud}
-                label="Cloud-hosted"
-                description="Runs on AWS / GCP / Azure"
-                checked={usesCloud}
-                onCheckedChange={setUsesCloud}
-              />
-              <ToggleRow
-                icon={Users}
-                label="Multi-tenant"
-                description="Shared infra across customers"
-                checked={hasMultipleTenants}
-                onCheckedChange={setHasMultipleTenants}
-              />
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-3">
+                <ToggleRow
+                  icon={Globe}
+                  label="Internet-facing"
+                  description="Publicly accessible entry points"
+                  checked={internetFacing}
+                  onCheckedChange={setInternetFacing}
+                />
+                <ToggleRow
+                  icon={Lock}
+                  label="Processes sensitive data"
+                  description="PII, PHI, PCI, credentials, etc."
+                  checked={sensitiveData}
+                  onCheckedChange={setSensitiveData}
+                />
+                <ToggleRow
+                  icon={Cloud}
+                  label="Cloud-hosted"
+                  description="Runs on AWS / GCP / Azure"
+                  checked={usesCloud}
+                  onCheckedChange={setUsesCloud}
+                />
+                <ToggleRow
+                  icon={Users}
+                  label="Multi-tenant"
+                  description="Shared infra across customers"
+                  checked={hasMultipleTenants}
+                  onCheckedChange={setHasMultipleTenants}
+                />
+              </div>
 
-              <div className="pt-4">
+              <div className="pt-2 sm:pt-4">
                 <Button
                   size="lg"
                   onClick={generateThreats}
                   disabled={loading !== null}
-                  className="w-full h-12 rounded-full bg-neutral-900 text-white hover:bg-neutral-800 text-base font-medium"
+                  className="w-full h-12 rounded-full bg-neutral-900 text-white hover:bg-neutral-800 text-sm sm:text-base font-medium"
                 >
                   {loading === "threats" ? (
                     <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <Loader2 className="w-4 h-4 animate-spin shrink-0" />
                       Analyzing...
                     </>
                   ) : (
                     <>
-                      <Sparkles className="w-4 h-4" />
+                      <Sparkles className="w-4 h-4 shrink-0" />
                       Generate Threat Model
                     </>
                   )}
@@ -992,18 +994,18 @@ export function ThreatModelStudio({
         </Card>
 
         {/* Results */}
-        <div ref={resultsRef} className="mt-10">
+        <div ref={resultsRef} className="mt-8 sm:mt-10">
           {error && (
-            <div className="mb-6 flex items-center gap-3 p-4 rounded-xl bg-red-50 border border-red-200 text-red-900">
-              <AlertCircle className="w-5 h-5 flex-shrink-0" />
-              <span className="text-sm">{error}</span>
+            <div className="mb-6 flex items-start sm:items-center gap-3 p-4 rounded-xl bg-red-50 border border-red-200 text-red-900 break-words">
+              <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 sm:mt-0" />
+              <span className="text-sm min-w-0 flex-1">{error}</span>
             </div>
           )}
 
           {hasAnyResult ? (
             <div className="space-y-6">
               {/* Tab bar */}
-              <div className="sticky top-14 z-20 -mx-4 px-4 py-2.5 tabbar-solid">
+              <div className="sticky top-14 z-20 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 py-2.5 tabbar-solid">
                 <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
                   {TABS.map((tab) => {
                     const Icon = tab.icon;
@@ -1027,17 +1029,17 @@ export function ThreatModelStudio({
                       <button
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all whitespace-nowrap ${
+                        className={`flex items-center gap-1.5 sm:gap-2 px-3.5 sm:px-4 py-2 rounded-full text-xs sm:text-sm font-medium transition-all whitespace-nowrap shrink-0 ${
                           activeTab === tab.id
                             ? "bg-neutral-900 text-white"
                             : "text-neutral-600 hover:bg-neutral-100"
                         }`}
                       >
-                        <Icon className="w-4 h-4" />
+                        <Icon className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
                         {tab.label}
                         {hasResult && (
                           <span
-                            className={`w-1.5 h-1.5 rounded-full ${
+                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                               activeTab === tab.id
                                 ? "bg-white"
                                 : "bg-neutral-900"
@@ -1163,12 +1165,12 @@ function SafetyMetricsTab({
 
   if (!result) {
     return (
-      <Card className="p-12 apple-card text-center">
+      <Card className="p-6 sm:p-12 apple-card text-center">
         <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-neutral-100 mb-4">
           <Lock className="w-6 h-6 text-neutral-400" />
         </div>
         <h3 className="text-title text-neutral-900 mb-2">Safety Metrics</h3>
-        <p className="text-neutral-500 max-w-md mx-auto mb-2">
+        <p className="text-sm sm:text-base text-neutral-500 max-w-md mx-auto mb-2">
           Evaluate each threat against your existing controls. The AI will assess
           whether your current security posture is <span className="font-medium text-green-700">SAFE</span>,{" "}
           <span className="font-medium text-amber-700">PARTIALLY SAFE</span>, or{" "}
@@ -1206,11 +1208,11 @@ function SafetyMetricsTab({
   return (
     <div className="space-y-6">
       {/* Overall posture card */}
-      <Card className="p-6 apple-card">
+      <Card className="p-4 sm:p-6 apple-card">
         <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
-          <div>
+          <div className="min-w-0">
             <h3 className="text-title text-neutral-900 mb-1">Safety Metrics</h3>
-            <p className="text-sm text-neutral-500">
+            <p className="text-xs sm:text-sm text-neutral-500">
               Security posture evaluated against existing controls
             </p>
           </div>
@@ -1218,7 +1220,7 @@ function SafetyMetricsTab({
             size="sm"
             onClick={onGenerate}
             variant="outline"
-            className="rounded-full border-neutral-300"
+            className="rounded-full border-neutral-300 shrink-0"
           >
             <Sparkles className="w-3.5 h-3.5" />
             Re-evaluate
@@ -1226,16 +1228,16 @@ function SafetyMetricsTab({
         </div>
 
         {/* Summary badges */}
-        <div className="flex items-center gap-3 flex-wrap mb-4">
+        <div className="flex items-center gap-2 sm:gap-3 flex-wrap mb-4">
           {(["SAFE", "PARTIALLY_SAFE", "UNSAFE"] as const).map((v) => {
             const cfg = verdictConfig[v];
             const count = counts[v] ?? 0;
             return (
               <div
                 key={v}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm font-medium ${cfg.bg} ${cfg.text} ${cfg.border}`}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs sm:text-sm font-medium tabular-nums ${cfg.bg} ${cfg.text} ${cfg.border}`}
               >
-                <span className={`w-2 h-2 rounded-full ${cfg.dot}`} />
+                <span className={`w-2 h-2 rounded-full shrink-0 ${cfg.dot}`} />
                 {count} {cfg.label}
               </div>
             );
@@ -1243,11 +1245,11 @@ function SafetyMetricsTab({
         </div>
 
         {/* Overall posture text */}
-        <div className="p-4 rounded-xl bg-neutral-50 border border-neutral-200">
+        <div className="p-3.5 sm:p-4 rounded-xl bg-neutral-50 border border-neutral-200">
           <p className="text-xs font-semibold text-neutral-500 uppercase tracking-wide mb-2">
             Overall Security Posture
           </p>
-          <p className="text-sm text-neutral-700 leading-relaxed">{result.overallPosture}</p>
+          <p className="text-sm text-neutral-700 leading-relaxed break-words">{result.overallPosture}</p>
         </div>
       </Card>
 
@@ -1256,7 +1258,7 @@ function SafetyMetricsTab({
         {result.metrics.map((m) => {
           const cfg = verdictConfig[m.verdict] ?? verdictConfig["UNSAFE"];
           return (
-            <Card key={m.threatId} className="p-5 apple-card">
+            <Card key={m.threatId} className="p-4 sm:p-5 apple-card">
               <div className="flex items-start justify-between gap-3 mb-3">
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-neutral-400 font-mono">{m.threatId}</span>
@@ -1269,11 +1271,11 @@ function SafetyMetricsTab({
                 </span>
               </div>
 
-              <h4 className="text-sm font-semibold text-neutral-900 mb-2 leading-snug">
+              <h4 className="text-sm font-semibold text-neutral-900 mb-2 leading-snug break-words">
                 {m.threat}
               </h4>
 
-              <p className="text-sm text-neutral-600 leading-relaxed mb-3">{m.reasoning}</p>
+              <p className="text-sm text-neutral-600 leading-relaxed mb-3 break-words">{m.reasoning}</p>
 
               {m.gaps.length > 0 && (
                 <div className="mt-2">
@@ -1282,9 +1284,9 @@ function SafetyMetricsTab({
                   </p>
                   <ul className="space-y-1">
                     {m.gaps.map((gap, i) => (
-                      <li key={i} className="flex items-start gap-2 text-xs text-neutral-700">
-                        <span className="mt-1 w-1 h-1 rounded-full bg-amber-400 flex-shrink-0" />
-                        {gap}
+                      <li key={i} className="flex items-start gap-2 text-xs text-neutral-700 break-words">
+                        <span className="mt-1.5 w-1 h-1 rounded-full bg-amber-400 flex-shrink-0" />
+                        <span className="min-w-0 flex-1">{gap}</span>
                       </li>
                     ))}
                   </ul>
@@ -1312,31 +1314,31 @@ function ToggleRow({
   onCheckedChange: (v: boolean) => void;
 }) {
   return (
-    <div className="flex items-center justify-between p-3 rounded-xl bg-neutral-50 border border-neutral-200">
-      <div className="flex items-center gap-3">
-        <div className="w-9 h-9 rounded-lg bg-white border border-neutral-200 flex items-center justify-center">
+    <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-neutral-50 border border-neutral-200">
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="w-9 h-9 rounded-lg bg-white border border-neutral-200 flex items-center justify-center shrink-0">
           <Icon className="w-4 h-4 text-neutral-700" />
         </div>
-        <div>
-          <div className="text-sm font-medium text-neutral-900">{label}</div>
-          <div className="text-xs text-neutral-500">{description}</div>
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-neutral-900 leading-snug">{label}</div>
+          <div className="text-xs text-neutral-500 leading-snug">{description}</div>
         </div>
       </div>
-      <Switch checked={checked} onCheckedChange={onCheckedChange} />
+      <Switch checked={checked} onCheckedChange={onCheckedChange} className="shrink-0" />
     </div>
   );
 }
 
 function EmptyState() {
   return (
-    <div className="text-center py-16">
-      <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-neutral-900 mb-6">
-        <BrandMark className="w-9 h-9 text-white" mono />
+    <div className="text-center py-10 sm:py-16 px-4">
+      <div className="inline-flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-neutral-900 mb-5 sm:mb-6">
+        <BrandMark className="w-8 h-8 sm:w-9 sm:h-9 text-white" mono />
       </div>
       <h3 className="text-title text-neutral-900 mb-2">
         Your analysis will appear here
       </h3>
-      <p className="text-neutral-500 max-w-md mx-auto">
+      <p className="text-sm sm:text-base text-neutral-500 max-w-md mx-auto leading-relaxed">
         Fill in the application profile above, then click{" "}
         <span className="font-medium text-neutral-900">Generate Threat Model</span>{" "}
         to start. Results for all six analyses live in the tabs.
@@ -1379,11 +1381,11 @@ function ThreatsTab({
 
   return (
     <div className="space-y-6">
-      <Card className="p-6 sm:p-8 apple-card">
+      <Card className="p-4 sm:p-6 lg:p-8 apple-card">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="flex-1 min-w-0">
             <h3 className="text-title text-neutral-900 mb-2">Executive Summary</h3>
-            <p className="text-neutral-600 leading-relaxed">{result.summary}</p>
+            <p className="text-sm sm:text-base text-neutral-600 leading-relaxed break-words">{result.summary}</p>
           </div>
           <ExportMenu
             label="Threat Model"
@@ -1403,7 +1405,7 @@ function ThreatsTab({
         </div>
 
         {result.detectedPatterns.length > 0 && (
-          <div className="mt-6 pt-6 border-t border-neutral-200">
+          <div className="mt-5 sm:mt-6 pt-5 sm:pt-6 border-t border-neutral-200">
             <p className="text-xs text-neutral-500 mb-3">
               DETECTED ARCHITECTURAL PATTERNS
             </p>
@@ -1412,7 +1414,7 @@ function ThreatsTab({
                 <Badge
                   key={i}
                   variant="outline"
-                  className="rounded-full border-neutral-300 text-neutral-700"
+                  className="rounded-full border-neutral-300 text-neutral-700 whitespace-normal text-left"
                 >
                   {p}
                 </Badge>
@@ -1423,21 +1425,21 @@ function ThreatsTab({
       </Card>
 
       {/* STRIDE category strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3">
         {counts.map((c) => (
           <div
             key={c.name}
-            className="p-4 rounded-2xl bg-white border border-neutral-200 hover:border-neutral-400 transition-colors"
+            className="p-3.5 sm:p-4 rounded-2xl bg-white border border-neutral-200 hover:border-neutral-400 transition-colors"
           >
             <div
-              className={`w-8 h-8 rounded-lg ${c.color} flex items-center justify-center font-semibold text-sm mb-3`}
+              className={`w-8 h-8 rounded-lg ${c.color} flex items-center justify-center font-semibold text-sm mb-2.5 sm:mb-3`}
             >
               {c.short}
             </div>
-            <div className="text-2xl font-semibold text-neutral-900">
+            <div className="text-xl sm:text-2xl font-semibold text-neutral-900 tabular-nums">
               {c.count}
             </div>
-            <div className="text-xs text-neutral-500 mt-1">{c.name}</div>
+            <div className="text-xs text-neutral-500 mt-1 leading-snug">{c.name}</div>
           </div>
         ))}
       </div>
@@ -1455,21 +1457,21 @@ function ThreatsTab({
       </div>
 
       {result.architectureNotes && (
-        <Card className="p-6 apple-card">
+        <Card className="p-4 sm:p-6 apple-card">
           <h4 className="text-sm font-semibold text-neutral-900 mb-2">
             Architecture Notes
           </h4>
-          <p className="text-sm text-neutral-600 leading-relaxed whitespace-pre-wrap">
+          <p className="text-sm text-neutral-600 leading-relaxed whitespace-pre-wrap break-words">
             {result.architectureNotes}
           </p>
         </Card>
       )}
 
       {/* Next actions */}
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-col sm:flex-row flex-wrap gap-2.5 sm:gap-3">
         <Button
           onClick={onNext}
-          className="rounded-full bg-neutral-900 text-white hover:bg-neutral-800"
+          className="w-full sm:w-auto rounded-full bg-neutral-900 text-white hover:bg-neutral-800"
         >
           <Wrench className="w-4 h-4" />
           Generate Mitigations
@@ -1477,7 +1479,7 @@ function ThreatsTab({
         <Button
           onClick={onDread}
           variant="outline"
-          className="rounded-full border-neutral-300"
+          className="w-full sm:w-auto rounded-full border-neutral-300"
         >
           <Gauge className="w-4 h-4" />
           Score with DREAD
@@ -1499,22 +1501,22 @@ function ThreatCard({
   const [showControl, setShowControl] = useState(false);
   const cat = STRIDE_CATEGORIES.find((c) => c.name === threat.strideCategory);
   return (
-    <Card className="p-5 apple-card">
-      <div className="flex items-start gap-4">
+    <Card className="p-4 sm:p-5 apple-card">
+      <div className="flex items-start gap-3 sm:gap-4">
         <div
-          className={`w-10 h-10 rounded-xl ${
+          className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl ${
             cat?.color || "bg-neutral-700 text-white"
-          } flex items-center justify-center font-semibold flex-shrink-0`}
+          } flex items-center justify-center font-semibold text-sm sm:text-base flex-shrink-0`}
         >
           {cat?.short || "?"}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-3 mb-1">
+          <div className="flex items-start justify-between gap-2 sm:gap-3 mb-1">
             <div className="flex items-center gap-2 flex-wrap min-w-0">
               <span className="text-xs text-neutral-400 font-mono">
                 {threat.id}
               </span>
-              <span className="text-xs text-neutral-500">{threat.category}</span>
+              <span className="text-xs text-neutral-500 break-words">{threat.category}</span>
             </div>
             <span
               className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${riskColor(
@@ -1524,16 +1526,16 @@ function ThreatCard({
               {threat.risk}
             </span>
           </div>
-          <h4 className="text-base font-semibold text-neutral-900 mb-1.5 leading-snug">
+          <h4 className="text-sm sm:text-base font-semibold text-neutral-900 mb-1.5 leading-snug break-words">
             {threat.threat}
           </h4>
-          <p className="text-sm text-neutral-600 leading-relaxed mb-2.5">
+          <p className="text-xs sm:text-sm text-neutral-600 leading-relaxed mb-2.5 break-words">
             {threat.description}
           </p>
 
           {/* Component + MITRE metadata — its own dedicated row */}
-          <div className="flex items-center gap-3 flex-wrap text-xs pb-1">
-            <span className="text-neutral-500">
+          <div className="flex items-center gap-x-3 gap-y-1.5 flex-wrap text-xs pb-1">
+            <span className="text-neutral-500 break-words">
               <span className="text-neutral-400">Component:</span>{" "}
               {threat.component}
             </span>
@@ -1543,7 +1545,7 @@ function ThreatCard({
                 {threat.mitreAttack.map((m, i) => (
                   <span
                     key={i}
-                    className="px-1.5 py-0.5 rounded bg-neutral-100 text-neutral-700 font-mono text-[10px]"
+                    className="px-1.5 py-0.5 rounded bg-neutral-100 text-neutral-700 font-mono text-[10px] break-all sm:break-normal"
                   >
                     {m}
                   </span>
@@ -1557,18 +1559,18 @@ function ThreatCard({
             <button
               type="button"
               onClick={() => setShowControl((v) => !v)}
-              className="flex items-center gap-1.5 text-xs text-neutral-500 hover:text-neutral-700 transition-colors"
+              className="flex items-center gap-1.5 text-xs text-neutral-500 hover:text-neutral-700 transition-colors py-0.5"
             >
               {showControl ? (
-                <ChevronUp className="w-3 h-3" />
+                <ChevronUp className="w-3 h-3 shrink-0" />
               ) : (
-                <ChevronDown className="w-3 h-3" />
+                <ChevronDown className="w-3 h-3 shrink-0" />
               )}
               {currentControl
                 ? "Edit current controls"
                 : "Add current controls (optional)"}
               {currentControl && (
-                <span className="ml-1 w-1.5 h-1.5 rounded-full bg-neutral-900" />
+                <span className="ml-1 w-1.5 h-1.5 rounded-full bg-neutral-900 shrink-0" />
               )}
             </button>
             <AnimatePresence>
@@ -1589,11 +1591,11 @@ function ThreatCard({
                     rows={5}
                     className="mt-2 w-full text-xs text-neutral-700 placeholder-neutral-400 bg-neutral-50 border border-neutral-200 rounded-lg p-3 resize-y focus:outline-none focus:ring-1 focus:ring-neutral-400 min-h-[110px]"
                   />
-                  <div className="flex justify-between items-center mt-1">
+                  <div className="flex justify-between items-center gap-2 mt-1 flex-wrap">
                     <span className="text-[10px] text-neutral-400">
                       Used in Excel export &amp; as context for the LLM
                     </span>
-                    <span className="text-[10px] text-neutral-400">{currentControl.length}/500</span>
+                    <span className="text-[10px] text-neutral-400 tabular-nums">{currentControl.length}/500</span>
                   </div>
                 </motion.div>
               )}
@@ -1745,11 +1747,11 @@ function MitigationsTab({
     );
   return (
     <div className="space-y-6">
-      <Card className="p-6 sm:p-8 apple-card">
+      <Card className="p-4 sm:p-6 lg:p-8 apple-card">
         <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
-          <div>
+          <div className="min-w-0">
             <h3 className="text-title text-neutral-900 mb-1">Mitigations</h3>
-            <p className="text-sm text-neutral-500">
+            <p className="text-xs sm:text-sm text-neutral-500">
               {result.mitigations.length} countermeasures across all threats.
             </p>
           </div>
@@ -1776,14 +1778,14 @@ function MitigationsTab({
           {result.mitigations.map((m, i) => (
             <div
               key={i}
-              className="p-4 rounded-xl bg-neutral-50 border border-neutral-200"
+              className="p-3.5 sm:p-4 rounded-xl bg-neutral-50 border border-neutral-200"
             >
-              <div className="flex items-start justify-between gap-3 mb-2">
-                <div className="flex-1">
-                  <p className="text-xs text-neutral-500 mb-1">
+              <div className="flex items-start justify-between gap-2.5 sm:gap-3 mb-2">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-neutral-500 mb-1 break-words">
                     MITIGATES: {m.threat}
                   </p>
-                  <p className="text-sm text-neutral-900 leading-relaxed">
+                  <p className="text-sm text-neutral-900 leading-relaxed break-words">
                     {m.mitigation}
                   </p>
                 </div>
@@ -1796,7 +1798,7 @@ function MitigationsTab({
                 </span>
               </div>
               {m.owaspReference && (
-                <span className="inline-block text-xs px-2 py-0.5 rounded bg-neutral-200 text-neutral-700 font-mono">
+                <span className="inline-block text-xs px-2 py-0.5 rounded bg-neutral-200 text-neutral-700 font-mono break-words max-w-full">
                   {m.owaspReference}
                 </span>
               )}
@@ -1806,17 +1808,17 @@ function MitigationsTab({
       </Card>
 
       {result.hardeningChecklist.length > 0 && (
-        <Card className="p-6 apple-card">
+        <Card className="p-4 sm:p-6 apple-card">
           <h4 className="text-sm font-semibold text-neutral-900 mb-4">
             Hardening Checklist
           </h4>
           <ul className="space-y-2">
             {result.hardeningChecklist.map((c, i) => (
               <li key={i} className="flex items-start gap-3 text-sm">
-                <span className="w-5 h-5 rounded-full border border-neutral-400 flex items-center justify-center text-[10px] text-neutral-500 flex-shrink-0 mt-0.5">
+                <span className="w-5 h-5 rounded-full border border-neutral-400 flex items-center justify-center text-[10px] text-neutral-500 flex-shrink-0 mt-0.5 tabular-nums">
                   {i + 1}
                 </span>
-                <span className="text-neutral-700">{c}</span>
+                <span className="text-neutral-700 break-words min-w-0 flex-1">{c}</span>
               </li>
             ))}
           </ul>
@@ -1855,13 +1857,13 @@ function DreadTab({
 
   return (
     <div className="space-y-6">
-      <Card className="p-6 sm:p-8 apple-card">
+      <Card className="p-4 sm:p-6 lg:p-8 apple-card">
         <div className="flex items-start justify-between gap-4 flex-wrap mb-6">
-          <div>
+          <div className="min-w-0">
             <h3 className="text-title text-neutral-900 mb-1">
               DREAD Risk Scoring
             </h3>
-            <p className="text-sm text-neutral-500">
+            <p className="text-xs sm:text-sm text-neutral-500">
               Prioritized by total DREAD score (max 50). Higher = more severe.
             </p>
           </div>
@@ -1885,23 +1887,23 @@ function DreadTab({
           />
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-5">
           {sorted.map((d, i) => (
             <div key={i} className="space-y-2">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
+              <div className="flex items-start sm:items-center justify-between gap-2.5 sm:gap-3">
+                <div className="flex items-start sm:items-center gap-2 sm:gap-3 min-w-0">
                   <span
-                    className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${riskColor(
+                    className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 mt-0.5 sm:mt-0 ${riskColor(
                       d.severity
                     )}`}
                   >
                     {d.severity}
                   </span>
-                  <span className="text-sm text-neutral-900 truncate">
+                  <span className="text-xs sm:text-sm font-medium sm:font-normal text-neutral-900 sm:truncate break-words min-w-0">
                     {d.threat}
                   </span>
                 </div>
-                <span className="text-sm font-mono font-semibold text-neutral-900 flex-shrink-0">
+                <span className="text-xs sm:text-sm font-mono tabular-nums font-semibold text-neutral-900 flex-shrink-0">
                   {d.total}
                   <span className="text-neutral-400">/50</span>
                 </span>
@@ -1912,7 +1914,7 @@ function DreadTab({
                   style={{ width: `${(d.total / max) * 100}%` }}
                 />
               </div>
-              <div className="grid grid-cols-5 gap-2 mt-2">
+              <div className="grid grid-cols-5 gap-1.5 sm:gap-2 mt-2">
                 {[
                   { label: "Damage", v: d.damage },
                   { label: "Repro", v: d.reproducibility },
@@ -1922,12 +1924,12 @@ function DreadTab({
                 ].map((dim) => (
                   <div
                     key={dim.label}
-                    className="text-center p-2 rounded-lg bg-neutral-50"
+                    className="text-center px-1 py-1.5 sm:p-2 rounded-lg bg-neutral-50 min-w-0"
                   >
-                    <div className="text-xs text-neutral-400">
+                    <div className="text-[10px] sm:text-xs text-neutral-400 truncate">
                       {dim.label}
                     </div>
-                    <div className="text-sm font-semibold text-neutral-900">
+                    <div className="text-xs sm:text-sm font-semibold text-neutral-900 tabular-nums">
                       {dim.v}
                     </div>
                   </div>
@@ -1965,13 +1967,13 @@ function DfdTab({
     );
   return (
     <div className="space-y-6">
-      <Card className="p-6 sm:p-8 apple-card">
+      <Card className="p-4 sm:p-6 lg:p-8 apple-card">
         <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
-          <div>
+          <div className="min-w-0">
             <h3 className="text-title text-neutral-900 mb-1">
               Data Flow Diagram
             </h3>
-            <p className="text-sm text-neutral-500">
+            <p className="text-xs sm:text-sm text-neutral-500">
               {result.components.length} components · {result.flows.length} data flows
             </p>
           </div>
@@ -1996,30 +1998,30 @@ function DfdTab({
         </div>
 
         {/* Rendered Mermaid DFD */}
-        <div className="rounded-xl bg-white border border-neutral-200 p-4 mb-5">
+        <div className="rounded-xl bg-white border border-neutral-200 p-3 sm:p-4 mb-5 overflow-hidden">
           <MermaidRenderer source={result.mermaid} />
         </div>
 
         {/* Copy Mermaid for draw.io / mermaid.live */}
         <CopyMermaidBar source={result.mermaid} />
 
-        <div className="grid lg:grid-cols-2 gap-6 mt-6">
-          <div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+          <div className="min-w-0">
             <h4 className="text-xs text-neutral-500 mb-3">COMPONENTS</h4>
             <div className="space-y-2">
               {result.components.map((c, i) => (
                 <div
                   key={i}
-                  className="flex items-center justify-between p-3 rounded-lg bg-neutral-50 border border-neutral-200"
+                  className="flex items-center justify-between gap-3 p-3 rounded-lg bg-neutral-50 border border-neutral-200"
                 >
-                  <div>
-                    <div className="text-sm font-medium text-neutral-900">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-neutral-900 break-words">
                       {c.name}
                     </div>
-                    <div className="text-xs text-neutral-500">{c.type}</div>
+                    <div className="text-xs text-neutral-500 break-words">{c.type}</div>
                   </div>
                   <span
-                    className={`text-xs px-2 py-0.5 rounded-full ${
+                    className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${
                       c.trustLevel === "High"
                         ? "bg-neutral-900 text-white"
                         : c.trustLevel === "Medium"
@@ -2033,7 +2035,7 @@ function DfdTab({
               ))}
             </div>
           </div>
-          <div>
+          <div className="min-w-0">
             <h4 className="text-xs text-neutral-500 mb-3">DATA FLOWS</h4>
             <div className="space-y-2">
               {result.flows.map((f, i) => (
@@ -2041,16 +2043,16 @@ function DfdTab({
                   key={i}
                   className="p-3 rounded-lg bg-neutral-50 border border-neutral-200"
                 >
-                  <div className="flex items-center gap-2 text-sm">
-                    <span className="font-medium text-neutral-900">
+                  <div className="flex items-center gap-1.5 sm:gap-2 text-sm flex-wrap">
+                    <span className="font-medium text-neutral-900 break-words">
                       {f.from}
                     </span>
-                    <ChevronRight className="w-3 h-3 text-neutral-400" />
-                    <span className="font-medium text-neutral-900">
+                    <ChevronRight className="w-3 h-3 text-neutral-400 shrink-0" />
+                    <span className="font-medium text-neutral-900 break-words">
                       {f.to}
                     </span>
                   </div>
-                  <div className="text-xs text-neutral-500 mt-1">
+                  <div className="text-xs text-neutral-500 mt-1 break-words">
                     {f.description}
                   </div>
                 </div>
@@ -2061,20 +2063,20 @@ function DfdTab({
 
         <details className="mt-5 group">
           <summary className="cursor-pointer text-sm font-medium text-neutral-700 hover:text-neutral-900 flex items-center gap-2">
-            <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" />
+            <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform shrink-0" />
             View Mermaid source
           </summary>
-          <pre className="mt-3 p-4 rounded-xl bg-neutral-50 border border-neutral-200 text-xs font-mono text-neutral-700 overflow-x-auto">
+          <pre className="mt-3 p-3 sm:p-4 rounded-xl bg-neutral-50 border border-neutral-200 text-xs font-mono text-neutral-700 overflow-x-auto">
             {result.mermaid}
           </pre>
         </details>
       </Card>
       {result.narrative && (
-        <Card className="p-6 apple-card">
+        <Card className="p-4 sm:p-6 apple-card">
           <h4 className="text-sm font-semibold text-neutral-900 mb-3">
             Trust Boundary Narrative
           </h4>
-          <p className="text-sm text-neutral-600 leading-relaxed">
+          <p className="text-sm text-neutral-600 leading-relaxed break-words">
             {result.narrative}
           </p>
         </Card>
@@ -2126,17 +2128,17 @@ function GherkinTab({
 
   return (
     <div className="space-y-6">
-      <Card className="p-6 sm:p-8 apple-card">
+      <Card className="p-4 sm:p-6 lg:p-8 apple-card">
         <div className="flex items-start justify-between gap-4 flex-wrap mb-6">
-          <div>
+          <div className="min-w-0">
             <h3 className="text-title text-neutral-900 mb-1">
               Gherkin Test Cases
             </h3>
-            <p className="text-sm text-neutral-500">
+            <p className="text-xs sm:text-sm text-neutral-500">
               {result.scenarios.length} BDD scenarios ready for your test suite.
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <Button
               variant="outline"
               size="sm"
@@ -2171,12 +2173,12 @@ function GherkinTab({
           {result.scenarios.map((s, i) => (
             <div
               key={i}
-              className="p-4 rounded-xl bg-neutral-50 border border-neutral-200"
+              className="p-3.5 sm:p-4 rounded-xl bg-neutral-50 border border-neutral-200"
             >
-              <div className="text-sm font-semibold text-neutral-900 mb-2">
+              <div className="text-sm font-semibold text-neutral-900 mb-2 break-words">
                 {s.title}
               </div>
-              <div className="space-y-1 text-sm font-mono">
+              <div className="space-y-1 text-xs sm:text-sm font-mono break-words">
                 <div className="text-neutral-700">
                   <span className="text-neutral-400">Given</span> {s.given.replace(/^Given\s/, "")}
                 </div>
@@ -2211,14 +2213,14 @@ function CopyMermaidBar({ source }: { source: string }) {
     setTimeout(() => setCopied(false), 2500);
   };
   return (
-    <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-neutral-50 border border-neutral-200">
-      <div className="flex items-center gap-2 min-w-0">
-        <Workflow className="w-4 h-4 text-neutral-500 flex-shrink-0" />
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 sm:p-3.5 rounded-xl bg-neutral-50 border border-neutral-200">
+      <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+        <Workflow className="w-4 h-4 text-neutral-500 flex-shrink-0 mt-0.5 sm:mt-0" />
         <div className="min-w-0">
-          <p className="text-sm font-medium text-neutral-900 truncate">
+          <p className="text-sm font-medium text-neutral-900">
             Mermaid diagram ready
           </p>
-          <p className="text-xs text-neutral-500">
+          <p className="text-xs text-neutral-500 leading-relaxed">
             Paste into mermaid.live, draw.io (Arrange -&gt; Insert -&gt; Advanced -&gt; Mermaid), or any Markdown editor.
           </p>
         </div>
@@ -2226,7 +2228,7 @@ function CopyMermaidBar({ source }: { source: string }) {
       <Button
         size="sm"
         onClick={copy}
-        className="rounded-full bg-neutral-900 text-white hover:bg-neutral-800 flex-shrink-0"
+        className="w-full sm:w-auto rounded-full bg-neutral-900 text-white hover:bg-neutral-800 flex-shrink-0"
       >
         {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
         {copied ? "Copied" : "Copy Mermaid"}
@@ -2238,7 +2240,7 @@ function CopyMermaidBar({ source }: { source: string }) {
 function LoadingBlock({ label, progress }: { label: string; progress?: number }) {
   const hasProgress = typeof progress === "number" && progress > 0;
   return (
-    <Card className="p-12 apple-card">
+    <Card className="p-8 sm:p-12 apple-card">
       <div className="flex flex-col items-center justify-center text-center">
         <Loader2 className="w-8 h-8 animate-spin text-neutral-900 mb-4" />
         <p className="text-sm font-medium text-neutral-900">{label}...</p>
@@ -2247,7 +2249,7 @@ function LoadingBlock({ label, progress }: { label: string; progress?: number })
             <span className="w-1.5 h-1.5 rounded-full bg-neutral-900 animate-pulse" />
             <p className="text-xs text-neutral-500">
               Receiving{" "}
-              <span className="font-mono font-medium text-neutral-700">
+              <span className="font-mono font-medium text-neutral-700 tabular-nums">
                 {progress! >= 1000
                   ? `${(progress! / 1000).toFixed(1)}k`
                   : progress}
@@ -2277,12 +2279,12 @@ function PromptToGenerate({
   requiresThreats?: boolean;
 }) {
   return (
-    <Card className="p-12 apple-card text-center">
+    <Card className="p-6 sm:p-12 apple-card text-center">
       <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-neutral-100 mb-4">
         <Sparkles className="w-6 h-6 text-neutral-400" />
       </div>
       <h3 className="text-title text-neutral-900 mb-2">{title}</h3>
-      <p className="text-neutral-500 max-w-md mx-auto mb-6">{description}</p>
+      <p className="text-sm sm:text-base text-neutral-500 max-w-md mx-auto mb-6">{description}</p>
       <Button
         onClick={onGenerate}
         className="rounded-full bg-neutral-900 text-white hover:bg-neutral-800"
@@ -2386,7 +2388,7 @@ function ExportMenu({
         <Button
           variant="outline"
           size="sm"
-          className="rounded-full border-neutral-300"
+          className="rounded-full border-neutral-300 shrink-0"
         >
           <Download className="w-3 h-3" />
           Export
@@ -2455,7 +2457,7 @@ function ImageUploadZone({
     errors.forEach((e) => toast.error(e));
   };
 
-  const onDrop = (e: React.DragEvent) => {
+  const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setDragging(false);
     if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
@@ -2463,17 +2465,17 @@ function ImageUploadZone({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <Label className="text-xs text-neutral-500 flex items-center gap-1.5">
-          <ImagePlus className="w-3.5 h-3.5" />
-          Architecture diagrams
+      <div className="flex items-start sm:items-center justify-between gap-2 flex-wrap">
+        <Label className="text-xs text-neutral-500 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 leading-relaxed">
+          <ImagePlus className="w-3.5 h-3.5 shrink-0" />
+          <span>Architecture diagrams</span>
           <span className="text-neutral-400 font-normal">(optional &middot; up to 5 &middot; PNG/JPEG/WebP &middot; max 4 MB each)</span>
         </Label>
         {images.length > 0 && (
           <button
             type="button"
             onClick={onClearAll}
-            className="text-xs text-neutral-400 hover:text-neutral-600 transition-colors"
+            className="text-xs text-neutral-400 hover:text-neutral-600 transition-colors whitespace-nowrap shrink-0"
           >
             Clear all
           </button>
@@ -2487,13 +2489,13 @@ function ImageUploadZone({
           onDragLeave={() => setDragging(false)}
           onDrop={onDrop}
           onClick={() => inputRef.current?.click()}
-          className={`relative flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed cursor-pointer transition-colors py-6 ${
+          className={`relative flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed cursor-pointer transition-colors px-4 py-5 sm:py-6 ${
             dragging
               ? "border-neutral-500 bg-neutral-100"
               : "border-neutral-300 bg-neutral-50 hover:border-neutral-400 hover:bg-neutral-100"
           }`}
         >
-          <ImagePlus className="w-6 h-6 text-neutral-400" />
+          <ImagePlus className="w-6 h-6 text-neutral-400 shrink-0" />
           <p className="text-xs text-neutral-500 text-center leading-relaxed">
             Drag &amp; drop diagrams here, or{" "}
             <span className="font-medium text-neutral-700">click to browse</span>
@@ -2513,31 +2515,31 @@ function ImageUploadZone({
 
       {/* Thumbnails */}
       {images.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 sm:gap-3">
           {images.map((img) => (
             <div
               key={img.id}
               className="relative group rounded-xl overflow-hidden border border-neutral-200 bg-neutral-50"
             >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={img.previewUrl}
                 alt={img.name}
-                className="w-full h-28 object-cover"
+                className="w-full h-24 sm:h-28 object-cover"
               />
-              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
+              <div className="absolute inset-0 bg-black/0 sm:group-hover:bg-black/40 transition-colors flex items-start justify-end p-1.5 sm:p-0 sm:items-center sm:justify-center pointer-events-none">
                 <button
                   type="button"
                   onClick={() => onRemove(img.id)}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity w-7 h-7 rounded-full bg-white/90 flex items-center justify-center hover:bg-white"
+                  className="pointer-events-auto opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 transition-opacity w-7 h-7 rounded-full bg-white/95 shadow-sm flex items-center justify-center hover:bg-white"
                   title="Remove image"
+                  aria-label={`Remove ${img.name}`}
                 >
                   <X className="w-4 h-4 text-neutral-800" />
                 </button>
               </div>
               <div className="px-2 py-1.5 border-t border-neutral-200">
                 <p className="text-[10px] text-neutral-600 truncate font-medium">{img.name}</p>
-                <p className="text-[10px] text-neutral-400">{img.sizeLabel}</p>
+                <p className="text-[10px] text-neutral-400 tabular-nums">{img.sizeLabel}</p>
               </div>
             </div>
           ))}

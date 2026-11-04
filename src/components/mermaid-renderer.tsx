@@ -135,7 +135,7 @@ export function MermaidRenderer({
   return (
     <div
       ref={containerRef}
-      className={`mermaid-container flex justify-center overflow-x-auto ${className}`}
+      className={`mermaid-container w-full overflow-x-auto [&_svg]:max-w-full [&_svg]:h-auto [&_svg]:mx-auto [&_svg]:block ${className}`}
       dangerouslySetInnerHTML={{ __html: svg }}
     />
   );

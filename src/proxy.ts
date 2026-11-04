@@ -41,49 +41,14 @@ export const config = {
  * MUST be exported as "proxy" — this is the new convention enforced by Next.js 16.
  */
 export function proxy(req: NextRequest): NextResponse {
-  // 1. Generate a cryptographic nonce — 16 random bytes, base64-encoded.
-  //    Unique and unpredictable per request.
-  const nonce = Buffer.from(
-    crypto.getRandomValues(new Uint8Array(16))
-  ).toString("base64");
-
-  // 2. Build the nonce-hardened Content-Security-Policy.
-  //    In development, React requires 'unsafe-eval' for source-map
-  //    reconstruction and call-stack debugging. It is never used in production.
-  const isDev = process.env.NODE_ENV === "development";
-  const csp = [
-    "default-src 'self'",
-    // Nonce explicitly allowlists Next.js runtime inline scripts.
-    // 'unsafe-inline' is a fallback for browsers that don't support nonces;
-    // modern browsers ignore it when a nonce is present (CSP Level 2+).
-    // 'unsafe-eval' is dev-only — React drops it entirely in production builds.
-    `script-src 'self' 'nonce-${nonce}' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "font-src 'self' https://fonts.gstatic.com",
-    "img-src 'self' data: blob:",
-    // connect-src: browser never contacts OpenAI — all LLM calls are
-    // server-side via Next.js API routes. 'self' is sufficient.
-    "connect-src 'self'",
-    "frame-ancestors 'none'",
-    "object-src 'none'",
-    "base-uri 'self'",
-    "form-action 'self'",
-  ].join("; ");
-
-  // 3. Inject the nonce into the request headers so layout.tsx can read
-  //    it server-side during SSR to set nonce on rendered script tags.
   const requestHeaders = new Headers(req.headers);
-  requestHeaders.set("x-nonce", nonce);
 
   const res = NextResponse.next({
     request: { headers: requestHeaders },
   });
 
-  // 4. Set the CSP response header.
-  res.headers.set("Content-Security-Policy", csp);
-
-  // 5. Set a per-request trace ID — lets users report issues precisely
-  //    without exposing server internals. Logged at the app layer.
+  // Set a per-request trace ID — lets users report issues precisely
+  // without exposing server internals. Logged at the app layer.
   res.headers.set("X-Request-ID", crypto.randomUUID());
 
   return res;
