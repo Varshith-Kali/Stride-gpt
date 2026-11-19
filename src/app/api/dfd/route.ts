@@ -6,7 +6,7 @@ import {
   handleError,
   checkRateLimit,
 } from "@/lib/api-utils";
-import { validateThreatModelInput, validateImages } from "@/lib/validation";
+import { sanitizeThreats, validateThreatModelInput, validateImages } from "@/lib/validation";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -19,6 +19,7 @@ export async function POST(req: NextRequest) {
     const parsed = await readJsonRequest<{
       input?: unknown;
       images?: unknown;
+      threats?: unknown;
     }>(req);
     if (!parsed.ok) return parsed.error;
 
@@ -33,10 +34,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Optional multimodal images — session-only, never stored
+    // Optional multimodal images -- session-only, never stored
     const images = validateImages(data.images);
+    // Optional threats -- aligns DFD components with generated threat model
+    const threats = Array.isArray(data.threats)
+      ? sanitizeThreats(data.threats)
+      : undefined;
 
-    const result = await generateDfd(config, input, images.length > 0 ? images : undefined);
+    const result = await generateDfd(
+      config,
+      input,
+      images.length > 0 ? images : undefined,
+      threats && threats.length > 0 ? threats : undefined
+    );
     return Response.json(result);
   } catch (e) {
     return handleError(e);

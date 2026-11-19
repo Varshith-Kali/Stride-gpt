@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Validate justifications — Record<threatId, text>
+    // Validate justifications -- Record<threatId, text>
     const justifications: Record<string, string> = {};
     if (data.justifications && typeof data.justifications === "object") {
       for (const [key, val] of Object.entries(
@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Validate appInput (minimal — we only need it for the compact summary)
+    // Validate appInput (minimal -- we only need it for the compact summary)
     if (!data.appInput || typeof data.appInput !== "object") {
       return Response.json(
         { error: "appInput is required." },

@@ -37,7 +37,7 @@ const AUTH_METHODS: ReadonlySet<AuthMethod> = new Set<AuthMethod>([
   "Certificate-based",
 ]);
 
-/** Max lengths — large enough for real apps, small enough to prevent abuse. */
+/** Max lengths -- large enough for real apps, small enough to prevent abuse. */
 export const LIMITS = {
   APP_NAME: 200,
   DESCRIPTION: 8000,
@@ -49,7 +49,6 @@ export const LIMITS = {
   MAX_MITIGATIONS: 100,
   MAX_DFD_COMPONENTS: 50,
   MAX_DFD_FLOWS: 100,
-  MAX_GHERKIN_SCENARIOS: 100,
 } as const;
 
 /**
@@ -109,7 +108,7 @@ export function validateThreatModelInput(
 
 /**
  * Validate an array of threats returned from the LLM before using them
- * downstream (e.g. for mitigations, DREAD scoring). Strips malformed entries.
+ * downstream (e.g. for mitigations, safety metrics, or DFD). Strips malformed entries.
  */
 export function sanitizeThreats(threats: unknown[]): Threat[] {
   return threats
@@ -122,23 +121,32 @@ export function sanitizeThreats(threats: unknown[]): Threat[] {
         typeof th.strideCategory === "string"
       );
     })
-    .map((th) => ({
-      id: typeof th.id === "string" ? clamp(sanitizeText(th.id), LIMITS.THREAT_ID) : "",
-      category: typeof th.category === "string" ? clamp(sanitizeText(th.category), 100) : "",
-      threat: clamp(sanitizeText(th.threat), LIMITS.THREAT_TITLE),
-      component: clamp(sanitizeText(th.component || ""), LIMITS.THREAT_COMPONENT),
-      description: clamp(sanitizeText(th.description), LIMITS.THREAT_DESCRIPTION),
-      strideCategory: th.strideCategory,
-      mitreAttack: Array.isArray(th.mitreAttack)
-        ? th.mitreAttack
-            .filter((m) => typeof m === "string")
-            .map((m) => clamp(sanitizeText(m), 60))
-            .slice(0, 10)
-        : [],
-      risk: ["Low", "Medium", "High", "Critical"].includes(th.risk as string)
-        ? (th.risk as Threat["risk"])
-        : "Medium",
-    }))
+    .map((th, idx) => {
+      const rawId =
+        typeof th.id === "string"
+          ? clamp(sanitizeText(th.id), LIMITS.THREAT_ID).toUpperCase()
+          : "";
+      const normalizedId = rawId
+        ? rawId.replace(/^(T)[-_](\d{1,4})$/, "$1$2")
+        : `T${String(idx + 1).padStart(3, "0")}`;
+      return {
+        id: normalizedId,
+        category: typeof th.category === "string" ? clamp(sanitizeText(th.category), 100) : "",
+        threat: clamp(sanitizeText(th.threat), LIMITS.THREAT_TITLE),
+        component: clamp(sanitizeText(th.component || ""), LIMITS.THREAT_COMPONENT),
+        description: clamp(sanitizeText(th.description), LIMITS.THREAT_DESCRIPTION),
+        strideCategory: th.strideCategory,
+        mitreAttack: Array.isArray(th.mitreAttack)
+          ? th.mitreAttack
+              .filter((m) => typeof m === "string")
+              .map((m) => clamp(sanitizeText(m), 60))
+              .slice(0, 10)
+          : [],
+        risk: ["Low", "Medium", "High", "Critical"].includes(th.risk as string)
+          ? (th.risk as Threat["risk"])
+          : "Medium",
+      };
+    })
     .slice(0, LIMITS.MAX_THREATS);
 }
 
@@ -170,7 +178,7 @@ export function validateImages(raw: unknown): LlmImage[] {
       if (typeof img.dataUrl !== "string") return false;
       // Verify it looks like a data-URL with the declared MIME type
       if (!img.dataUrl.startsWith(`data:${img.mimeType as string};base64,`)) return false;
-      // Size guard — reject oversized images server-side too
+      // Size guard -- reject oversized images server-side too
       if (img.dataUrl.length > MAX_IMAGE_B64_CHARS) return false;
       return true;
     })

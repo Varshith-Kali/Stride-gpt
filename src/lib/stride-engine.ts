@@ -1,20 +1,25 @@
 /**
- * STRIDE GPT ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Threat modeling engine.
+ * STRIDE GPT -- Threat modeling engine.
  * Calls the OpenAI Responses API (POST /v1/responses) using the user-provided
- * API key. The key is passed server-side only ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never stored or logged.
+ * API key. The key is passed server-side only -- never stored or logged.
  *
  * All functions in this module run server-side only (Next.js API routes).
  */
 import type { LlmConfig } from "@/lib/llm-config";
 import { sanitizeThreats, sanitizeText, clamp, LIMITS } from "@/lib/validation";
+import {
+  getDfdNodeId,
+  reconcileDfdComponentThreats,
+  sanitizeThreatIds,
+} from "@/lib/dfd-helpers";
 
 /**
  * A session-only image supplied by the user (architecture diagram etc.).
  * Held in React state client-side; sent as base64 data-URLs in the request
- * body ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never persisted to any storage layer.
+ * body -- never persisted to any storage layer.
  */
 export interface LlmImage {
-  /** MIME type ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â one of the server-side ALLOWED_IMAGE_TYPES. */
+  /** MIME type -- one of the server-side ALLOWED_IMAGE_TYPES. */
   mimeType: "image/png" | "image/jpeg" | "image/webp";
   /** Full data-URL: "data:image/png;base64,..." */
   dataUrl: string;
@@ -80,17 +85,6 @@ export interface ThreatModelResult {
   detectedPatterns: string[];
 }
 
-export interface AttackTreeNode {
-  goal: string;
-  subgoals: AttackTreeNode[];
-}
-
-export interface AttackTreeResult {
-  root: AttackTreeNode;
-  mermaid: string;
-  narrative: string;
-}
-
 export interface Mitigation {
   threat: string;
   mitigation: string;
@@ -103,32 +97,28 @@ export interface MitigationResult {
   hardeningChecklist: string[];
 }
 
-export interface DreadScore {
-  threat: string;
-  damage: number;
-  reproducibility: number;
-  exploitability: number;
-  affectedUsers: number;
-  discoverability: number;
-  total: number;
-  severity: "Low" | "Medium" | "High" | "Critical";
+export type DfdComponentType = "External Entity" | "Process" | "Data Store";
+export type DfdTrustLevel = "External" | "DMZ" | "Internal" | "Secure";
+
+export interface DfdComponent {
+  name: string;
+  type: DfdComponentType;
+  trustLevel: DfdTrustLevel;
+  threatIds?: string[];
+}
+
+export interface DfdFlow {
+  from: string;
+  to: string;
+  description: string;
+  bidirectional?: boolean;
 }
 
 export interface DfdResult {
   mermaid: string;
-  components: { name: string; type: string; trustLevel: string }[];
-  flows: { from: string; to: string; description: string }[];
+  components: DfdComponent[];
+  flows: DfdFlow[];
   narrative: string;
-}
-
-export interface GherkinResult {
-  feature: string;
-  scenarios: {
-    title: string;
-    given: string;
-    when: string;
-    then: string[];
-  }[];
 }
 
 /** A single prioritized recommendation produced by generateRecommendations. */
@@ -137,7 +127,7 @@ export interface Recommendation {
   threatIds: string[];
   /** One-sentence imperative action. */
   action: string;
-  /** 3ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“5 concrete implementation steps. */
+  /** 3-5 concrete implementation steps. */
   steps: string[];
   /** Implementation effort relative estimate. */
   effort: "Low" | "Medium" | "High";
@@ -153,9 +143,9 @@ export interface RecommendationResult {
 /**
  * Safety evaluation for a single threat, assessed against the user-provided
  * existing controls. Verdict is one of three states:
- *   SAFE           ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â controls fully address the threat
- *   PARTIALLY_SAFE ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â controls partially address the threat; gaps remain
- *   UNSAFE         ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â controls are absent, insufficient, or bypassed
+ *   SAFE           -- controls fully address the threat
+ *   PARTIALLY_SAFE -- controls partially address the threat; gaps remain
+ *   UNSAFE         -- controls are absent, insufficient, or bypassed
  */
 export type SafetyVerdict = "SAFE" | "PARTIALLY_SAFE" | "UNSAFE";
 
@@ -167,13 +157,13 @@ export interface SafetyMetric {
   /** Evaluation verdict */
   verdict: SafetyVerdict;
   /**
-   * 2ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“4 sentence reasoning explaining why the controls are sufficient,
+   * 2-4 sentence reasoning explaining why the controls are sufficient,
    * insufficient, or absent. Grounded in the STRIDE category and MITRE ATT&CK
    * context. Actionable where possible.
    */
   reasoning: string;
   /**
-   * 1ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“3 specific gaps or improvements the architect should address.
+   * 1-3 specific gaps or improvements the architect should address.
    * Empty array when verdict is SAFE.
    */
   gaps: string[];
@@ -186,15 +176,37 @@ export interface SafetyMetricsResult {
 }
 
 const SYSTEM_PROMPT = [
-  "You are STRIDE GPT ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a principal security architect and threat modeling authority.",
+  "You are STRIDE GPT, a principal security architect and threat modeling authority.",
   "Specializations: STRIDE, OWASP LLM Top 10, OWASP Agentic AI / ASI Top 10, MITRE ATT&CK Enterprise, MITRE ATLAS for ML/AI.",
+  "SOURCE PRIORITY & SCOPING RULES (strictly enforced):",
+  "  1. Priority 1 - Recommendations / Suggestions in Application Description: If the Application Description includes explicit recommendations, suggestions, security review notes, or targeted change/integration items, center the threat modeling around those exact recommendations/suggestions and the components, APIs, and data flows they affect.",
+  "  2. Priority 2 - Application Description Points: If no explicit recommendations or suggestions are provided, treat all points, components, integrations, and workflows in the Application Description as the primary authoritative scope.",
+  "  3. Priority 3 - Attached Diagrams (Architecture, DFD, Sequence) as Supplementary Context: Use attached diagrams as additional architectural context and reasoning support (exact component names, protocols, sequence interactions, auth handshakes, trust boundaries, direct upstream/downstream dependencies). NEVER bloat or dilute the threat model with threats for unrelated components from a larger enterprise diagram when the Application Description focuses on a specific integration, feature, or subsystem.",
   "OUTPUT RULES (strictly enforced):",
   "  1. Return ONLY valid JSON matching the schema requested. No prose, no markdown fences, no commentary.",
   "  2. MITRE ATT&CK IDs must be real published techniques (e.g. T1078, T1190). Never invent IDs.",
-  "  3. Risk levels (Low/Medium/High/Critical) must reflect realistic exploitability and impact ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not worst-case by default.",
+  "  3. Risk levels (Low/Medium/High/Critical) must reflect realistic exploitability and impact -- not worst-case by default.",
   "  4. Threat descriptions must name the specific attack vector, affected component, and realistic impact.",
-  "  5. Do not repeat threats ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â each entry must be distinct in vector, component, or impact.",
+  "  5. Do not repeat threats -- each entry must be distinct in vector, component, or impact.",
 ].join("\n");
+
+/**
+ * Shared scoping and priority instructions for threat model generation so
+ * streaming and non-streaming paths remain completely synchronized.
+ */
+function buildThreatModelPriorityBlock(hasImages: boolean, imageCount: number): string {
+  return (
+    `\n\nINPUT PRIORITY & SCOPING INSTRUCTIONS (follow in strict order):` +
+    `\n  1. FIRST check DESCRIPTION for explicit recommendations, suggestions, security review comments, or targeted focus items.` +
+    `\n     - If recommendations or suggestions are present, build the threat model specifically around those recommendations/suggestions and the directly interacting components, APIs, and data flows.` +
+    `\n  2. SECOND, if no explicit recommendations or suggestions are present, derive the full threat modeling scope from the points, integrations, features, and components stated in DESCRIPTION.` +
+    (hasImages
+      ? `\n  3. ATTACHED DIAGRAMS -- SUPPLEMENTARY CONTEXT (${imageCount} diagram(s) attached: architecture diagram, DFD, or sequence diagram):` +
+        `\n     - Use the attached diagram(s) as extra context and deeper technical reasoning for the in-scope areas identified in DESCRIPTION (exact component names, call sequences, protocols, trust boundaries, auth/token touchpoints, and directly connected data stores or services).` +
+        `\n     - Do NOT generate threats for unrelated or out-of-scope components visible in a broader architecture diagram if DESCRIPTION scopes the review to a specific subsystem, feature, or API integration.`
+      : "")
+  );
+}
 
 /**
  * Compact key=value context block. ~30% fewer tokens than prose format
@@ -223,8 +235,7 @@ function buildContextString(input: ThreatModelInput): string {
  *
  * Typed as `Record<string, unknown>` (rather than `any`) so callers get
  * IntelliSense on property access and cannot silently pass the result to
- * typed functions without explicit narrowing. Array results (e.g. DREAD)
- * are accessed at call sites via `parsed as unknown[]`.
+ * typed functions without explicit narrowing.
  */
 function parseJsonLoose(text: string): Record<string, any> | null {
   // Strip code fences and leading/trailing whitespace
@@ -232,7 +243,7 @@ function parseJsonLoose(text: string): Record<string, any> | null {
   const start = cleaned.search(/[{[]/);
   if (start === -1) return null;
 
-  // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Attempt 1: find a balanced JSON block and parse it cleanly ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+  // -- Attempt 1: find a balanced JSON block and parse it cleanly ------------
   const openChar = cleaned[start];
   const closeChar = openChar === "{" ? "}" : "]";
   let depth = 0, end = -1, inStr = false, esc = false;
@@ -245,7 +256,7 @@ function parseJsonLoose(text: string): Record<string, any> | null {
     try { return JSON.parse(cleaned.slice(start, end + 1)) as Record<string, any>; } catch { /* fall through */ }
   }
 
-  // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Attempt 2: JSON is truncated (hit max_output_tokens mid-stream) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+  // -- Attempt 2: JSON is truncated (hit max_output_tokens mid-stream) --------
   // Walk the string to build a repair suffix of closing brackets/braces.
   const stack: string[] = [];
   let repairInStr = false, repairEsc = false;
@@ -291,22 +302,20 @@ function parseJsonLoose(text: string): Record<string, any> | null {
  * Normalize an LLM-returned threat label back to the closest canonical threat
  * title from the original input list.
  *
- * WHY: LLMs often paraphrase threat titles when generating mitigations or
- * DREAD scores (e.g. "Malicious Prompt Injection" vs "Prompt Injection Attack").
- * This causes the exact-key lookup in the Excel builder to miss, leaving the
- * Recommendation / DREAD columns blank.
+ * WHY: LLMs often paraphrase threat titles when generating mitigations
+ * (e.g. "Malicious Prompt Injection" vs "Prompt Injection Attack").
  *
  * STRATEGY (3-tier, fast and dependency-free):
- * 1. Exact lowercase match  ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â handles the common case
- * 2. Substring containment  ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â handles "Prompt Injection" ÃƒÂ¢Ã…Â Ã¢â‚¬Å¡ "Malicious Prompt Injection"
- * 3. Word-overlap scoring   ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â handles rephrased titles with shared key words
- *    (only counts words ÃƒÂ¢Ã¢â‚¬Â°Ã‚Â¥ 4 chars to skip stop-words like "the", "and", "via")
+ * 1. Exact lowercase match  -- handles the common case
+ * 2. Substring containment  -- handles "Prompt Injection" in "Malicious Prompt Injection"
+ * 3. Word-overlap scoring   -- handles rephrased titles with shared key words
+ *    (only counts words >= 4 chars to skip stop-words like "the", "and", "via")
  *
  * Falls back to the original raw string if no match scores > 0.
  */
 function closestThreatTitle(
   raw: string,
-  canonicalTitles: Map<string, string>  // lowercase ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ original
+  canonicalTitles: Map<string, string>  // lowercase -> original
 ): string {
   const key = raw.toLowerCase().trim();
 
@@ -360,7 +369,7 @@ export class LlmError extends Error {
 }
 
 /**
- * Request timeout ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â 120 s matches the Next.js route `maxDuration = 120`.
+ * Request timeout -- 120 s matches the Next.js route `maxDuration = 120`.
  * GPT-5.5 is a reasoning model: TTFT is higher but structured JSON output
  * completes quickly once reasoning finishes. Align to the route cap.
  */
@@ -384,7 +393,7 @@ async function fetchWithTimeout(
     if (e instanceof Error && e.name === "AbortError") {
       throw new LlmError(
         "timeout",
-        `Request timed out after ${timeoutMs / 1000}s. The provider may be overloaded ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â try again.`
+        `Request timed out after ${timeoutMs / 1000}s. The provider may be overloaded -- try again.`
       );
     }
     throw new LlmError(
@@ -402,7 +411,7 @@ async function fetchWithTimeout(
  * Reference: https://platform.openai.com/docs/guides/error-codes
  */
 function classifyOpenAIError(status: number, body: string): LlmError {
-  // 401 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â invalid or expired API key
+  // 401 -- invalid or expired API key
   if (status === 401) {
     return new LlmError(
       "invalid-key",
@@ -410,7 +419,7 @@ function classifyOpenAIError(status: number, body: string): LlmError {
       status
     );
   }
-  // 403 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â org-level restriction or key scope issue
+  // 403 -- org-level restriction or key scope issue
   if (status === 403) {
     return new LlmError(
       "invalid-key",
@@ -418,7 +427,7 @@ function classifyOpenAIError(status: number, body: string): LlmError {
       status
     );
   }
-  // 429 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â rate limit or quota; parse Retry-After if present
+  // 429 -- rate limit or quota; parse Retry-After if present
   if (status === 429) {
     const retryAfterMatch = body.match(/retry.after["\s:]+([\d.]+)/i);
     const retryHint = retryAfterMatch
@@ -430,7 +439,7 @@ function classifyOpenAIError(status: number, body: string): LlmError {
       status
     );
   }
-  // 400 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â bad request (malformed body, model not found, content filter)
+  // 400 -- bad request (malformed body, model not found, content filter)
   if (status === 400) {
     if (body.includes("content_filter") || body.includes("content filter")) {
       return new LlmError(
@@ -445,11 +454,11 @@ function classifyOpenAIError(status: number, body: string): LlmError {
       status
     );
   }
-  // 5xx ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â server-side OpenAI error
+  // 5xx -- server-side OpenAI error
   if (status >= 500) {
     return new LlmError(
       "provider",
-      `OpenAI server error (${status}). The service may be temporarily unavailable ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â try again shortly.`,
+      `OpenAI server error (${status}). The service may be temporarily unavailable -- try again shortly.`,
       status
     );
   }
@@ -472,9 +481,9 @@ function classifyOpenAIError(status: number, body: string): LlmError {
  * `instructions` field. The `input` array contains only user/assistant turns.
  *
  * Response shape:
- *   output[0].content[0].text  ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â standard output_text item
- *   output[0].content          ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â plain string (some model variants)
- *   output[0].text             ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â direct text field (some internal models)
+ *   output[0].content[0].text  -- standard output_text item
+ *   output[0].content          -- plain string (some model variants)
+ *   output[0].text             -- direct text field (some internal models)
  *
  * Security:
  * - API key travels only in the encrypted Authorization header of this
@@ -485,16 +494,13 @@ function classifyOpenAIError(status: number, body: string): LlmError {
  * A single content part for a multimodal LLM message.
  * Matches the OpenAI Responses API input_text / input_image shapes.
  */
-// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Per-operation token budgets ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+// --- Per-operation token budgets ----------------------------------------------
 // Sized so that well-formed output never gets truncated.
-//   Threat model: 12-15 threats ÃƒÆ’Ã¢â‚¬â€ ~350 chars each + metadata ÃƒÂ¢Ã¢â‚¬Â°Ã‹â€  6,500 chars ÃƒÂ¢Ã¢â‚¬Â°Ã‹â€  5,000 tokens
-//   Mitigations:  1 per threat ÃƒÆ’Ã¢â‚¬â€ ~200 chars ÃƒÂ¢Ã¢â‚¬Â°Ã‹â€  3,500 chars at 15 threats
-//   DFD:          20 components + 35 flows + narrative ÃƒÂ¢Ã¢â‚¬Â°Ã‹â€  3,000 chars
-//   DREAD:        15 scores, purely numeric, compact
-//   Safety:       1 verdict per threat with reasoning ÃƒÂ¢Ã¢â‚¬Â°Ã‹â€  4,000 chars
-//   Gherkin:      1 scenario per threat with steps ÃƒÂ¢Ã¢â‚¬Â°Ã‹â€  4,000 chars
-//   Attack tree:  nested tree + narrative ÃƒÂ¢Ã¢â‚¬Â°Ã‹â€  3,500 chars
-//   Recommendations: grouped actions ÃƒÂ¢Ã¢â‚¬Â°Ã‹â€  3,000 chars
+//   Threat model: 12-15 threats x ~350 chars each + metadata ~ 6,500 chars ~ 5,000 tokens
+//   Mitigations:  1 per threat x ~200 chars ~ 3,500 chars at 15 threats
+//   DFD:          20 components + 35 flows + narrative ~ 3,000 chars
+//   Safety:       1 verdict per threat with reasoning ~ 4,000 chars
+//   Recommendations: grouped actions ~ 3,000 chars
 
 const MAX_TOKENS = {
   // Right-sized for GPT-5.5: lower cap = less reasoning budget consumed.
@@ -502,10 +508,7 @@ const MAX_TOKENS = {
   MITIGATIONS:     12288,  // reasoning + 1 mitigation per threat
   DFD:             16384,  // reasoning for graph structure + 20 components + 35 flows
   SAFETY:          16384,  // reasoning overhead + full verdict per threat with citations
-  GHERKIN:         10240,  // reasoning + scenario steps
-  ATTACK_TREE:      8192,  // reasoning + tree structure
   RECOMMENDATIONS:  8192,  // reasoning + grouped actions
-  DREAD:            6144,  // reasoning + numeric scores
 } as const;
 type ContentPart =
   | { type: "input_text"; text: string }
@@ -580,7 +583,7 @@ async function callLLM(
   // --- Extract text from all known Responses API output shapes ---
   //
   // GPT-5.5 is a reasoning model and returns MULTIPLE output items:
-  //   output[0] = { type: "reasoning", content: [] }   ÃƒÂ¢Ã¢â‚¬Â Ã‚Â empty, skip this
+  //   output[0] = { type: "reasoning", content: [] }   <- empty, skip this
   //   output[1] = { type: "message",   content: [{type:"output_text", text:"..."}] }
   //
   // Standard models return a single output item:
@@ -593,7 +596,7 @@ async function callLLM(
     : [];
 
   for (const outputItem of outputArr) {
-    // Skip reasoning/thinking items ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â they have empty content
+    // Skip reasoning/thinking items -- they have empty content
     if (outputItem.type === "reasoning") continue;
 
     // Shape 1 (standard): content is an array of items with .text
@@ -628,13 +631,13 @@ async function callLLM(
     if (t.length > 0) return t;
   }
 
-  // Log full structure for server-side debugging only ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never reaches client
+  // Log full structure for server-side debugging only -- never reaches client
   console.error("[callLLM] Could not extract text. Full response:", JSON.stringify(data)?.slice(0, 2000));
   throw new LlmError("provider", "OpenAI returned an empty or unrecognized response.");
 
 }
 
-// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ SSE Streaming ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+// --- SSE Streaming ------------------------------------------------------------
 
 /**
  * Stream tokens from OpenAI Responses API via Server-Sent Events.
@@ -644,15 +647,15 @@ async function callLLM(
  *
  * WHY STREAMING:
  * - Non-streaming: waits 60-120s for the full JSON response before returning
- *   anything ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ connection times out on slow/loaded models.
- * - Streaming: first tokens arrive within 2-5s ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ client sees progress,
+ *   anything -> connection times out on slow/loaded models.
+ * - Streaming: first tokens arrive within 2-5s -> client sees progress,
  *   connection stays alive, 120s window is almost never hit.
  *
  * OpenAI SSE event shape (Responses API):
- *   response.output_text.delta ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ { delta: string }
- *   response.output_text.done  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ { text: string }  ÃƒÂ¢Ã¢â‚¬Â Ã‚Â full accumulated text
- *   response.completed         ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ stream is done
- *   error                      ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ { message: string }
+ *   response.output_text.delta -> { delta: string }
+ *   response.output_text.done  -> { text: string }  <- full accumulated text
+ *   response.completed         -> stream is done
+ *   error                      -> { message: string }
  */
 async function* callLLMStream(
   config: LlmConfig,
@@ -675,9 +678,8 @@ async function* callLLMStream(
         model: config.model,
         instructions: SYSTEM_PROMPT,
         input: messages,
+        max_output_tokens: maxOutputTokens,
         stream: true,
-
-
         // No reasoning effort param for GPT-5.5 (not an o-series model).
         store: false,
       }),
@@ -687,7 +689,7 @@ async function* callLLMStream(
     clearTimeout(timer);
     if (e instanceof LlmError) throw e;
     if (e instanceof Error && e.name === "AbortError") {
-      throw new LlmError("timeout", `Request timed out after ${LLM_TIMEOUT_MS / 1000}s. The provider may be overloaded ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â try again.`);
+      throw new LlmError("timeout", `Request timed out after ${LLM_TIMEOUT_MS / 1000}s. The provider may be overloaded -- try again.`);
     }
     throw new LlmError("network", `Failed to reach OpenAI: ${e instanceof Error ? e.message : "unknown"}`);
   }
@@ -707,6 +709,7 @@ async function* callLLMStream(
   const decoder = new TextDecoder();
   let lineBuffer = "";
   let finalText = "";
+  let deltaBuffer = "";
 
   try {
     outer: while (true) {
@@ -720,7 +723,25 @@ async function* callLLMStream(
         throw new LlmError("network", `Stream read error: ${e instanceof Error ? e.message : "unknown"}`);
       }
 
-      if (chunk.done) break;
+      if (chunk.done) {
+        const trailing = lineBuffer.trim();
+        if (trailing.startsWith("data:")) {
+          const payload = trailing.slice(5).trim();
+          if (payload && payload !== "[DONE]") {
+            try {
+              const evt = JSON.parse(payload) as Record<string, unknown>;
+              if (evt["type"] === "response.output_text.done" && typeof evt["text"] === "string") {
+                finalText = evt["text"] as string;
+              } else if (evt["type"] === "response.output_text.delta" && typeof evt["delta"] === "string") {
+                deltaBuffer += evt["delta"] as string;
+              }
+            } catch {
+              // Ignore incomplete trailing JSON
+            }
+          }
+        }
+        break;
+      }
 
       lineBuffer += decoder.decode(chunk.value, { stream: true });
       const lines = lineBuffer.split("\n");
@@ -739,11 +760,12 @@ async function* callLLMStream(
         const evtType = evt["type"] as string | undefined;
 
         if (evtType === "response.output_text.delta" && typeof evt["delta"] === "string") {
+          const delta = evt["delta"] as string;
+          deltaBuffer += delta;
           // Yield each chunk so the caller can track live progress in the UI.
-          yield { kind: "delta" as const, text: evt["delta"] as string };
+          yield { kind: "delta" as const, text: delta };
         } else if (evtType === "response.output_text.done" && typeof evt["text"] === "string") {
-          // `done` event carries the *complete* authoritative output text.
-          // This is always more reliable than concatenating deltas.
+          // `done` event carries the complete authoritative output text.
           finalText = evt["text"] as string;
         } else if (evtType === "error") {
           const msg = (evt["message"] ?? JSON.stringify(evt)) as string;
@@ -758,13 +780,8 @@ async function* callLLMStream(
     reader.releaseLock();
   }
 
-  // Yield the authoritative final text.
-  // - If finalText is set (from response.output_text.done), always prefer it.
-  // - If no deltas arrived and no finalText (unexpected), nothing to yield.
-  // NOTE: We do NOT concatenate finalText onto the deltas ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â that would double
-  //       the JSON string and break parseJsonLoose. The caller must use ONLY
-  //       the 'done' event text for parsing, not the concatenated 'delta' chunks.
-  yield { kind: "done" as const, text: finalText };
+  // Prefer authoritative response.output_text.done, fall back to accumulated deltas.
+  yield { kind: "done" as const, text: finalText || deltaBuffer };
 }
 
 /**
@@ -794,28 +811,18 @@ export async function* streamGenerateThreatModel(
 
   const prompt =
     `${context}` +
-    (hasImages
-      ? `\n\nARCHITECTURE DIAGRAM ANALYSIS (${images!.length} diagram(s) attached):` +
-        `\nBefore generating threats, carefully analyse every uploaded diagram to identify:` +
-        `\n  - All components, services, APIs, databases, queues, caches, and external systems visible` +
-        `\n  - Trust boundaries and network zones (DMZ, internal, cloud VPC, on-premise)` +
-        `\n  - Data flows, protocols, and communication patterns between components` +
-        `\n  - Authentication/authorisation touchpoints and where credentials are exchanged` +
-        `\n  - Any misconfigurations, overly permissive rules, or security gaps visible in the diagram` +
-        `\n  - Third-party integrations and supply chain touchpoints` +
-        `\nThe diagram is the ground truth for architecture ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the description supplements it. Prioritise what you see in the diagram.`
-      : "") +
-    `\n\nTASK: Produce a focused STRIDE threat model for this application.` +
+    buildThreatModelPriorityBlock(Boolean(hasImages), images?.length ?? 0) +
+    `\n\nTASK: Produce a focused, high-signal STRIDE threat model aligned strictly with the prioritized scope above.` +
     (isAi
-      ? " Since this is an AI application, also incorporate OWASP LLM Top 10 and, for agentic systems, OWASP ASI Top 10."
+      ? " Since this is an AI application, also incorporate OWASP LLM Top 10 (LLM01-LLM10) and, for agentic systems, OWASP ASI Top 10 (ASI01-ASI10)."
       : "") +
     `\n\nThreat generation rules:` +
-    `\n  - Generate 12-15 distinct, high-signal threats (no padding or duplicate categories)` +
-    `\n  - Every threat MUST reference a specific component or data flow` +
+    `\n  - Generate 10-15 distinct, high-signal threats focused on the in-scope surface (do not pad with out-of-scope components)` +
+    `\n  - Every threat MUST reference a specific in-scope component or data flow using a clear, consistent component name` +
     `\n  - Include the realistic attack vector (not just the category)` +
     `\n  - Risk level must reflect exploitability given the auth method(s) and deployment context` +
-    `\n  - MITRE ATT&CK IDs must be real published techniques ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never invent an ID` +
-    `\n  - Cover all six STRIDE categories` +
+    `\n  - MITRE ATT&CK IDs must be real published techniques -- never invent an ID` +
+    `\n  - Cover all applicable STRIDE categories across the scoped system` +
     `\n\nReturn ONLY a JSON object (no prose, no markdown fences) with this exact shape:\n` +
     `{\n` +
     `  "threats": [\n` +
@@ -823,21 +830,21 @@ export async function* streamGenerateThreatModel(
     `      "id": "T001",\n` +
     `      "category": "short category label",\n` +
     `      "threat": "concise threat title naming the component and attack",\n` +
-    `      "component": "exact component name from the architecture",\n` +
-    `      \"description\": \"attack vector, exploitation method, and business impact in 2-3 sentences\",\n` +
+    `      "component": "exact in-scope component name",\n` +
+    `      "description": "attack vector, exploitation method, and business impact in 2-3 sentences",\n` +
     `      "strideCategory": "Spoofing | Tampering | Repudiation | Information Disclosure | Denial of Service | Elevation of Privilege",\n` +
     `      "mitreAttack": ["T1078 Valid Accounts"],\n` +
     `      "risk": "Low | Medium | High | Critical"\n` +
     `    }\n` +
     `  ],\n` +
-    `  \"summary\": \"3-4 sentence executive summary of overall risk profile and top concerns\",\n` +
-    `  "architectureNotes": "specific weak points and high-risk data flows identified",\n` +
+    `  "summary": "3-4 sentence executive summary of the scoped risk profile and top concerns",\n` +
+    `  "architectureNotes": "specific weak points, trust boundary issues, and high-risk data flows within the scoped surface",\n` +
     `  "detectedPatterns": ["pattern 1", "pattern 2"]\n` +
     `}`;
 
-  // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Separate progress tracking from parsing ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-  // delta chunks   ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ progress counter only (shown in UI, NOT used for parsing)
-  // done.text      ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ the authoritative JSON string from OpenAI (parsed below)
+  // --- Separate progress tracking from parsing ------------------------------
+  // delta chunks   -> progress counter only (shown in UI, NOT used for parsing)
+  // done.text      -> the authoritative JSON string from OpenAI (parsed below)
   //
   // CRITICAL: Never concatenate deltas for parsing. The 'done' event text from
   // response.output_text.done is the single, complete, reliable source.
@@ -853,7 +860,7 @@ export async function* streamGenerateThreatModel(
         yield { type: "progress", chars: charCount };
       }
     } else {
-      // kind === "done" ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â this is the complete authoritative output text
+      // kind === "done" -- this is the complete authoritative output text
       finalJson = chunk.text;
     }
   }
@@ -862,7 +869,7 @@ export async function* streamGenerateThreatModel(
 
   const parsed = parseJsonLoose(finalJson);
   if (!parsed || !Array.isArray(parsed.threats)) {
-    // Log raw output server-side only for debugging ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never sent to client
+    // Log raw output server-side only for debugging -- never sent to client
     console.error("[streamGenerateThreatModel] parse failed. Output length:", finalJson.length, "Preview:", finalJson.slice(0, 300));
     yield {
       type: "done",
@@ -906,28 +913,18 @@ export async function generateThreatModel(
 
   const prompt =
     `${context}` +
-    (hasImages
-      ? `\n\nARCHITECTURE DIAGRAM ANALYSIS (${images!.length} diagram(s) attached):` +
-        `\nBefore generating threats, carefully analyse every uploaded diagram to identify:` +
-        `\n  - All components, services, APIs, databases, queues, caches, and external systems visible` +
-        `\n  - Trust boundaries and network zones (DMZ, internal, cloud VPC, on-premise)` +
-        `\n  - Data flows, protocols, and communication patterns between components` +
-        `\n  - Authentication/authorisation touchpoints and where credentials are exchanged` +
-        `\n  - Any misconfigurations, overly permissive rules, or security gaps visible in the diagram` +
-        `\n  - Third-party integrations and supply chain touchpoints` +
-        `\nThe diagram is the ground truth for architecture ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the description supplements it. Prioritise what you see in the diagram.`
-      : "") +
-    `\n\nTASK: Produce a comprehensive STRIDE threat model for this application.` +
+    buildThreatModelPriorityBlock(Boolean(hasImages), images?.length ?? 0) +
+    `\n\nTASK: Produce a comprehensive, scoped STRIDE threat model aligned strictly with the prioritized scope above.` +
     (isAi
-      ? " Since this is an AI application, also incorporate OWASP LLM Top 10 (LLM01ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“LLM10) and, for agentic systems, OWASP ASI Top 10 (ASI01ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ASI10)."
+      ? " Since this is an AI application, also incorporate OWASP LLM Top 10 (LLM01-LLM10) and, for agentic systems, OWASP ASI Top 10 (ASI01-ASI10)."
       : "") +
-    ` Detect any relevant architectural patterns (e.g., RAG pipeline, multi-agent system, code execution environment, tool/MCP ecosystem, microservices mesh, event-driven architecture).` +
+    ` Detect any relevant architectural patterns (e.g., API integration, RAG pipeline, multi-agent system, code execution environment, tool/MCP ecosystem, microservices mesh, event-driven architecture).` +
     `\n\nThreat generation rules:` +
-    `\n  - Every threat MUST reference a specific component or data flow from the application description${hasImages ? " or the uploaded diagram" : ""}` +
+    `\n  - Every threat MUST reference a specific in-scope component or data flow from DESCRIPTION${hasImages ? " (enriched with exact component/flow context from the attached diagram(s))" : ""}` +
     `\n  - Include the realistic attack vector (not just the category)` +
     `\n  - Risk level must reflect exploitability given the authentication method(s) and deployment context` +
-    `\n  - MITRE ATT&CK IDs must be real published techniques ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never invent an ID` +
-    `\n  - Cover all six STRIDE categories; aim for 12ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“15 threats per model ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â more for complex or multi-service apps` +
+    `\n  - MITRE ATT&CK IDs must be real published techniques -- never invent an ID` +
+    `\n  - Cover all applicable STRIDE categories; aim for 10-15 distinct, high-signal threats within the scoped surface (never pad with unrelated components)` +
     `\n\nReturn ONLY a JSON object (no prose, no markdown fences) with this exact shape:\n` +
     `{\n` +
     `  "threats": [\n` +
@@ -935,15 +932,15 @@ export async function generateThreatModel(
     `      "id": "T001",\n` +
     `      "category": "short category label",\n` +
     `      "threat": "concise threat title naming the component and attack",\n` +
-    `      "component": "exact component name from the architecture",\n` +
-    `      \"description\": \"attack vector, exploitation method, and business impact in 2-3 sentences\",\n` +
+    `      "component": "exact in-scope component name",\n` +
+    `      "description": "attack vector, exploitation method, and business impact in 2-3 sentences",\n` +
     `      "strideCategory": "Spoofing | Tampering | Repudiation | Information Disclosure | Denial of Service | Elevation of Privilege",\n` +
     `      "mitreAttack": ["T1078 Valid Accounts"],\n` +
     `      "risk": "Low | Medium | High | Critical"\n` +
     `    }\n` +
     `  ],\n` +
-    `  \"summary\": \"3-4 sentence executive summary of overall risk profile and top-3 concerns\",\n` +
-    `  "architectureNotes": "specific weak points, trust boundary violations, and high-risk data flows identified",\n` +
+    `  "summary": "3-4 sentence executive summary of the scoped risk profile and top-3 concerns",\n` +
+    `  "architectureNotes": "specific weak points, trust boundary violations, and high-risk data flows within the scoped surface",\n` +
     `  "detectedPatterns": ["pattern 1", "pattern 2"]\n` +
     `}`;
 
@@ -970,86 +967,6 @@ export async function generateThreatModel(
   };
 }
 
-export async function generateAttackTree(
-  config: LlmConfig,
-  input: ThreatModelInput,
-  images?: LlmImage[]
-): Promise<AttackTreeResult> {
-  const context = buildContextString(input);
-  const hasImages = images && images.length > 0;
-  const prompt =
-    `${context}` +
-    (hasImages
-      ? `\n\nARCHITECTURE DIAGRAMS (${images!.length} attached): Use the visible components, entry points, and trust boundaries to ground the attack paths in the actual architecture.`
-      : "") +
-    `\n\nTASK: Build a realistic attack tree for this application. ` +
-    `The root goal is "Compromise ${input.appName || "the application"}". ` +
-    `Decompose into sub-goals and leaf techniques reflecting the actual components${hasImages ? " visible in the diagram" : " described"}. ` +
-    `Minimum 3 levels of depth, 6-10 distinct leaf techniques. ` +
-    `Leaf techniques must reference specific components (e.g., "Exploit JWT misconfiguration in Auth Service", not just "Authentication bypass").` +
-    `\n\nReturn ONLY a JSON object (no prose, no markdown fences) with this exact shape:\n` +
-    `{\n` +
-    `  "root": {\n` +
-    `    "goal": "Compromise ${input.appName || "the application"}",\n` +
-    `    "subgoals": [\n` +
-    `      {\n` +
-    `        "goal": "sub-goal",\n` +
-    `        "subgoals": [{ "goal": "leaf technique referencing a specific component", "subgoals": [] }]\n` +
-    `      }\n` +
-    `    ]\n` +
-    `  },\n` +
-    `  "narrative": "2-3 paragraph narrative of the most plausible attack paths and the critical chokepoints to defend"\n` +
-    `}\n\nI will render the Mermaid diagram from the tree structure.`;
-
-  const raw = await callLLM(config, [buildUserMessage(prompt, images)], MAX_TOKENS.ATTACK_TREE);
-  const parsed = parseJsonLoose(raw);
-  if (!parsed || !parsed.root) {
-    return {
-      root: { goal: "Compromise application", subgoals: [] },
-      mermaid: "graph TD\n  root[Compromise application]",
-      narrative: "Unable to generate attack tree. Please try again.",
-    };
-  }
-  return {
-    root: parsed.root,
-    mermaid: treeToMermaid(parsed.root),
-    narrative: parsed.narrative ?? "",
-  };
-}
-
-function sanitizeMermaidNode(label: string): string {
-  return label.replace(/"/g, "'").replace(/[\[\]{}|><]/g, " ").trim();
-}
-
-/**
- * Convert an attack tree to a Mermaid flowchart string.
- *
- * Critically: the ROOT call MUST prepend "flowchart TD" ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â without it,
- * Mermaid cannot identify the diagram type and silently fails to render.
- * Recursive calls contribute only node+edge lines (no re-declaration of header).
- */
-function treeToMermaid(
-  node: AttackTreeNode,
-  parentId?: string,
-  counter: { n: number } = { n: 0 }
-): string {
-  const isRoot = !parentId;
-  const id = isRoot ? "root" : `n${counter.n++}`;
-  const safeLabel = sanitizeMermaidNode(node.goal);
-
-  const lines: string[] = [];
-  // Only the root call emits the Mermaid graph declaration.
-  if (isRoot) lines.push("flowchart TD");
-
-  lines.push(`  ${id}["${safeLabel}"]`);
-  if (parentId) lines.push(`  ${parentId} --> ${id}`);
-
-  for (const child of node.subgoals ?? []) {
-    lines.push(treeToMermaid(child, id, counter));
-  }
-  return lines.join("\n");
-}
-
 export async function generateMitigations(
   config: LlmConfig,
   input: ThreatModelInput,
@@ -1064,7 +981,7 @@ export async function generateMitigations(
   const prompt =
     `${context}` +
     (hasImages
-      ? `\n\nARCHITECTURE DIAGRAMS (${images!.length} attached): Use the visible components and architecture to make mitigations specific to the actual deployment ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not generic advice.`
+      ? `\n\nATTACHED DIAGRAMS -- SUPPLEMENTARY CONTEXT (${images!.length} attached): Use the attached diagram(s) as additional architectural context so mitigations fit the actual deployment and in-scope components from DESCRIPTION -- not generic advice.`
       : "") +
     `\n\nIDENTIFIED THREATS (${threats.length} total):\n${threatSummary}` +
     `\n\nTASK: For each threat above, propose a concrete, implementable mitigation tailored to this specific application and its architecture.` +
@@ -1136,368 +1053,466 @@ export async function generateMitigations(
 }
 
 
-export async function generateDreadScores(
-  config: LlmConfig,
-  threats: Threat[],
-  input?: ThreatModelInput,
-  images?: LlmImage[]
-): Promise<DreadScore[]> {
-  const context = input ? buildContextString(input) + "\n\n" : "";
-  const threatList = threats.map((t) => `- ${t.id}: ${t.threat}`).join("\n");
-  const hasImages = images && images.length > 0;
-  const prompt =
-    `${context}` +
-    `\n\nTHREATS TO SCORE (${threats.length} total):\n${threatList}` +
-    (hasImages
-      ? `\n\nARCHITECTURE DIAGRAMS (${images!.length} attached): ` +
-        `Use the visible deployment context ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â internet exposure, component criticality, data sensitivity ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ` +
-        `to calibrate scores. A component directly exposed to the internet warrants higher exploitability and discoverability scores.`
-      : "") +
-    `\n\nTASK: Score each threat using the DREAD model calibrated to this specific application context.` +
-    `\n\nDREAD scoring rules:` +
-    `\n  - Damage (1-10): potential business/data impact if the threat is fully exploited` +
-    `\n  - Reproducibility (1-10): how reliably an attacker can reproduce the attack` +
-    `\n  - Exploitability (1-10): skill/resources required (10 = unauthenticated, trivial exploit)` +
-    `\n  - Affected Users (1-10): breadth of impact (10 = all users or all tenants)` +
-    `\n  - Discoverability (1-10): how easily the vulnerability can be found (10 = publicly known)` +
-    `\n  - Total = sum of all 5 dimensions. Severity: <10 Low, 10-19 Medium, 20-29 High, 30-50 Critical` +
-    `\n  - Scores must be differentiated ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â avoid scoring every threat identically` +
-    `\n\nIMPORTANT: The API requires a JSON *object* as the root. Wrap the scores in an object with a "scores" key.` +
-    `\n\nReturn ONLY a JSON object (no prose, no markdown fences):\n` +
-    `{\n` +
-    `  "scores": [\n` +
-    `    {\n` +
-    `      "threat": "exact threat title",\n` +
-    `      "damage": 1-10,\n` +
-    `      "reproducibility": 1-10,\n` +
-    `      "exploitability": 1-10,\n` +
-    `      "affectedUsers": 1-10,\n` +
-    `      "discoverability": 1-10,\n` +
-    `      "total": <sum>,\n` +
-    `      "severity": "Low | Medium | High | Critical"\n` +
-    `    }\n` +
-    `  ]\n` +
-    `}`;
-
-  const raw = await callLLM(config, [buildUserMessage(prompt, images)], MAX_TOKENS.DREAD);
-  const parsed = parseJsonLoose(raw);
-
-  // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Extract the scores array ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-  // The API json_object mode ALWAYS returns an object, never a bare array.
-  // The LLM should return { "scores": [...] } per the prompt.
-  // As a defensive fallback we also check any other array property on the
-  // object so we're resilient to the LLM using a different key name.
-  let scoresArr: unknown[] = [];
-  if (parsed) {
-    if (Array.isArray(parsed.scores)) {
-      scoresArr = parsed.scores as unknown[];
-    } else {
-      // Fallback: find the first array-valued property on the parsed object
-      const firstArr = Object.values(parsed as Record<string, unknown>).find(Array.isArray);
-      if (firstArr) scoresArr = firstArr as unknown[];
-    }
+function normalizeDfdComponentType(raw: unknown): DfdComponentType {
+  const s = typeof raw === "string" ? raw.toLowerCase().trim() : "";
+  if (
+    s.includes("external") ||
+    s.includes("entity") ||
+    s.includes("actor") ||
+    s.includes("user") ||
+    s.includes("client") ||
+    s.includes("third-party") ||
+    s.includes("third party") ||
+    s.includes("provider")
+  ) {
+    return "External Entity";
   }
-
-  if (scoresArr.length === 0) return [];
-
-  // Build canonical-title lookup to normalise LLM's threat labels.
-  const canonicalTitles = new Map<string, string>();
-  for (const t of threats) {
-    canonicalTitles.set(t.threat.toLowerCase().trim(), t.threat);
+  if (
+    s.includes("store") ||
+    s.includes("database") ||
+    s.includes("db") ||
+    s.includes("cache") ||
+    s.includes("bucket") ||
+    s.includes("blob") ||
+    s.includes("storage") ||
+    s.includes("vault") ||
+    s.includes("secret") ||
+    s.includes("queue") ||
+    s.includes("log")
+  ) {
+    return "Data Store";
   }
-
-  const SEVERITY_VALUES = ["Low", "Medium", "High", "Critical"] as const;
-  const clampScore = (v: unknown): number => {
-    const n = Number(v);
-    return Number.isFinite(n) ? Math.min(10, Math.max(1, Math.round(n))) : 5;
-  };
-  return scoresArr
-    .filter(
-      (d): d is Record<string, unknown> =>
-        !!d && typeof d === "object" && typeof (d as Record<string, unknown>).threat === "string"
-    )
-    .map((d: Record<string, unknown>) => {
-      const damage          = clampScore(d.damage);
-      const reproducibility = clampScore(d.reproducibility);
-      const exploitability  = clampScore(d.exploitability);
-      const affectedUsers   = clampScore(d.affectedUsers);
-      const discoverability = clampScore(d.discoverability);
-      const total = damage + reproducibility + exploitability + affectedUsers + discoverability;
-      const severity: DreadScore["severity"] = SEVERITY_VALUES.includes(d.severity as DreadScore["severity"])
-        ? (d.severity as DreadScore["severity"])
-        : total >= 30 ? "Critical" : total >= 20 ? "High" : total >= 10 ? "Medium" : "Low";
-      return {
-        // Normalise the LLM's threat label so Excel DREAD columns map correctly.
-        threat:          closestThreatTitle(
-                           clamp(sanitizeText(d.threat as string), LIMITS.THREAT_TITLE),
-                           canonicalTitles
-                         ),
-        damage,
-        reproducibility,
-        exploitability,
-        affectedUsers,
-        discoverability,
-        total,
-        severity,
-      };
-    })
-    .slice(0, LIMITS.MAX_THREATS);
+  return "Process";
 }
 
+function normalizeDfdTrustLevel(
+  raw: unknown,
+  type: DfdComponentType
+): DfdTrustLevel {
+  const s = typeof raw === "string" ? raw.toLowerCase().trim() : "";
+  if (s === "external" || s === "untrusted" || s === "low") return "External";
+  if (s === "dmz" || s.includes("edge") || s.includes("perimeter")) return "DMZ";
+  if (s === "secure" || s === "high" || s === "restricted" || s === "sensitive") {
+    return "Secure";
+  }
+  if (s === "internal" || s === "medium") return "Internal";
+  if (type === "External Entity") return "External";
+  if (type === "Data Store") return "Secure";
+  return "Internal";
+}
 
+function cleanDfdLabel(raw: string, maxLen: number): string {
+  return sanitizeText(raw)
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/["'`]/g, "")
+    .replace(/[[\]{}()|<>\\;]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLen)
+    .trim();
+}
+
+function mergeFlowLabels(a: string, b: string): string {
+  const cleanA = cleanDfdLabel(a, 30);
+  const cleanB = cleanDfdLabel(b, 30);
+  if (!cleanA) return cleanB || "Data flow";
+  if (!cleanB || cleanA.toLowerCase() === cleanB.toLowerCase()) return cleanA;
+  // Prefer a short slash combination if it fits cleanly within 30 chars; otherwise keep the clearer label
+  const combined = `${cleanA} / ${cleanB}`;
+  if (combined.length <= 30) return combined;
+  return cleanA.length <= 28 ? cleanA : cleanDfdLabel(cleanA, 28);
+}
+
+const CLIENT_ENTITY_RE = /\b(user|users|customer|client|browser|mobile|app\s*ui|web\s*ui|portal|admin|operator|developer|employee|patient|trader|cli|end\s*user|actor)\b/i;
+
+function isClientExternalEntity(
+  comp: DfdComponent,
+  inboundCount: number,
+  outboundCount: number
+): boolean {
+  if (CLIENT_ENTITY_RE.test(comp.name)) return true;
+  // If an external entity primarily initiates inbound traffic and isn't named as an API/LLM/IdP/CRM/vendor
+  const serviceHint = /\b(api|llm|model|provider|idp|identity|crm|webhook|gateway|vendor|smtp|email|sms|broker|ehr|kyc|embedding)\b/i;
+  if (serviceHint.test(comp.name)) return false;
+  return outboundCount > 0 && inboundCount === 0;
+}
 
 export async function generateDfd(
   config: LlmConfig,
   input: ThreatModelInput,
-  images?: LlmImage[]
+  images?: LlmImage[],
+  threats?: Threat[]
 ): Promise<DfdResult> {
   const context = buildContextString(input);
   const hasImages = images && images.length > 0;
+  const threatEntries = (threats ?? [])
+    .map((t) => ({
+      id: sanitizeText(t.id || "").trim().toUpperCase(),
+      component: sanitizeText(t.component || "").trim(),
+      title: clamp(sanitizeText(t.threat || "").trim(), 90),
+    }))
+    .filter((t) => t.id.length > 0 && t.component.length > 0)
+    .slice(0, 30);
+
+  const validThreatIdSet = new Set(threatEntries.map((t) => t.id));
+
   const prompt =
     `${context}` +
+    `\n\nDFD SCOPING & SOURCE PRIORITY:` +
+    `\n  - Priority 1: Focus the DFD on the in-scope components and flows defined by DESCRIPTION (especially any explicit recommendations, suggestions, or specific subsystem/API integration mentioned there)${threatEntries.length > 0 ? " and the IDENTIFIED THREATS list below" : ""}.` +
     (hasImages
-      ? `\n\nARCHITECTURE DIAGRAMS (${images!.length} attached): Extract every visible component ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â services, ` +
-        `databases, queues, external actors, CDN, WAF, gateways. Be faithful to what is shown.`
+      ? `\n  - Priority 2 -- ATTACHED DIAGRAMS AS SUPPLEMENTARY CONTEXT (${images!.length} attached: architecture, DFD, or sequence diagram): Use the diagram(s) for accurate component names, trust boundaries, protocols, and direct upstream/downstream touchpoints around the in-scope flows. Do NOT dump unrelated components from a larger enterprise diagram that are outside DESCRIPTION's scope.`
       : "") +
-    `\n\nTASK: Generate a detailed Level-1 Data Flow Diagram (DFD) that covers ALL essential components of this application.` +
-    `\n\nCOMPONENT COVERAGE REQUIREMENTS ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â include ALL that apply to this application:` +
-    `\n  EXTERNAL ENTITIES (actors outside the system boundary):` +
-    `\n    - End users (Browser, Mobile App, CLI, etc.)` +
-    `\n    - Third-party APIs or services called by the system` +
-    `\n    - Identity providers (IdP, LDAP, OAuth server, SSO provider)` +
-    `\n    - External data sources or partner systems` +
-    `\n  PROCESSES (system logic inside the trust boundary):` +
-    `\n    - Edge/network layer: CDN, WAF, Load Balancer, API Gateway, Reverse Proxy` +
-    `\n    - Authentication & authorization service` +
-    `\n    - Core application services / microservices (name each one)` +
-    `\n    - Background workers, job queues, event processors` +
-    `\n    - AI/ML inference service if applicable` +
-    `\n  DATA STORES (persistent storage):` +
-    `\n    - Primary database (SQL/NoSQL)` +
-    `\n    - Cache layer (Redis, Memcached)` +
-    `\n    - Message queue / event bus (Kafka, SQS, RabbitMQ)` +
-    `\n    - Object/blob storage (S3, GCS)` +
-    `\n    - Secret manager, audit log store` +
-    `\n\nSCALE GUIDELINES:` +
-    `\n  - Use 12-20 components. Fewer is only acceptable for very simple apps.` +
-    `\n  - Aim for 20-35 flows ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â show every meaningful data exchange.` +
-    `\n  - Flow descriptions must be specific: "JWT access token", "SQL query", "Kafka event", "presigned URL"` +
-    `\n  - Component names: 2-4 words, no punctuation, unique` +
-    `\n  - trustLevel values: "External", "DMZ", "Internal", "Secure"` +
-    `\n    Ãƒâ€šÃ‚Â· External = actors outside the system` +
-    `\n    Ãƒâ€šÃ‚Â· DMZ      = edge/perimeter layer (CDN, WAF, API GW, Load Balancer)` +
-    `\n    Ãƒâ€šÃ‚Â· Internal = core application services and processes` +
-    `\n    Ãƒâ€šÃ‚Â· Secure   = sensitive stores (databases, secrets, audit logs)` +
+    (threatEntries.length > 0
+      ? `\n\nIDENTIFIED THREATS & AFFECTED COMPONENTS (EVERY affected component below MUST appear as a clearly named component in the DFD with its matching threat IDs in "threatIds"):\n` +
+        threatEntries.map((t) => `- ${t.id} | Component: ${t.component} | ${t.title}`).join("\n")
+      : "") +
+    `\n\nTASK: Generate a clean, uncluttered Level-1 Data Flow Diagram (DFD) covering the in-scope architectural components, data stores, external actors, and trust boundaries.` +
+    `\n\nCOMPONENT COVERAGE REQUIREMENTS -- include all that apply within scope:` +
+    `\n  EXTERNAL ENTITIES ("type": "External Entity", "trustLevel": "External"):` +
+    `\n    - End users / clients (Browser Client, Mobile App, Admin Portal)` +
+    `\n    - External Identity Providers (IdP) & Third-party APIs/LLM services` +
+    `\n  DMZ / EDGE PROCESSES ("type": "Process", "trustLevel": "DMZ"):` +
+    `\n    - CDN / WAF, API Gateway / Reverse Proxy` +
+    `\n  INTERNAL PROCESSES ("type": "Process", "trustLevel": "Internal"):` +
+    `\n    - Auth Service, Core Domain Services, Workers, AI/LLM Orchestrator` +
+    `\n  DATA STORES ("type": "Data Store", "trustLevel": "Secure"):` +
+    `\n    - Databases, Vector Store, Cache (Redis), Object Storage, Secrets Manager, Audit Log` +
+    `\n\nDFD INTEGRITY & CLEAN-LAYOUT RULES:` +
+    `\n  - Include 6-16 distinct, high-signal in-scope components. Every component MUST appear in at least one flow.` +
+    `\n  - Include 8-22 flows MAX. Emit AT MOST ONE flow between any two components -- combine request and response into a single concise flow (e.g. "TLS OIDC exchange", "HTTPS embedding API", "Vector query & chunks") rather than separate forward and return arrows.` +
+    `\n  - Every "from" and "to" MUST match a component "name" EXACTLY.` +
+    `\n  - Keep component names concise (2-3 words, alphanumeric + spaces/hyphens only, no parentheses or slashes) and consistent with the component names in IDENTIFIED THREATS.` +
+    `\n  - Keep flow descriptions ultra-concise (2-4 words, max 26 chars, e.g. "HTTPS JWT request", "TLS SQL query", "Embedding API call").` +
+    `\n  - Use ONLY these exact values for "type": "External Entity" | "Process" | "Data Store".` +
+    `\n  - Use ONLY these exact values for "trustLevel": "External" | "DMZ" | "Internal" | "Secure".` +
+    (threatEntries.length > 0
+      ? `\n  - For "threatIds", attach ONLY real matching IDs from the identified threats list above (or [] if none apply), ensuring every identified threat maps to its affected component(s).`
+      : `\n  - Set "threatIds": [] when no threats list was provided.`) +
     `\n\nReturn ONLY a JSON object (no prose, no markdown fences):\n` +
     `{\n` +
     `  "components": [\n` +
-    `    { "name": "Browser Client", "type": "External Entity", "trustLevel": "External" },\n` +
-    `    { "name": "CDN Edge", "type": "Process", "trustLevel": "DMZ" },\n` +
-    `    { "name": "API Gateway", "type": "Process", "trustLevel": "DMZ" },\n` +
-    `    { "name": "Auth Service", "type": "Process", "trustLevel": "Internal" },\n` +
-    `    { "name": "App Service", "type": "Process", "trustLevel": "Internal" },\n` +
-    `    { "name": "Primary DB", "type": "Data Store", "trustLevel": "Secure" },\n` +
-    `    { "name": "Cache Layer", "type": "Data Store", "trustLevel": "Secure" },\n` +
-    `    { "name": "Identity Provider", "type": "External Entity", "trustLevel": "External" }\n` +
+    `    { "name": "Browser Client", "type": "External Entity", "trustLevel": "External", "threatIds": [] },\n` +
+    `    { "name": "WAF and CDN", "type": "Process", "trustLevel": "DMZ", "threatIds": [] },\n` +
+    `    { "name": "API Gateway", "type": "Process", "trustLevel": "DMZ", "threatIds": ["T001"] },\n` +
+    `    { "name": "Auth Service", "type": "Process", "trustLevel": "Internal", "threatIds": [] },\n` +
+    `    { "name": "Core App Service", "type": "Process", "trustLevel": "Internal", "threatIds": [] },\n` +
+    `    { "name": "Primary Database", "type": "Data Store", "trustLevel": "Secure", "threatIds": [] },\n` +
+    `    { "name": "Redis Cache", "type": "Data Store", "trustLevel": "Secure", "threatIds": [] },\n` +
+    `    { "name": "Identity Provider", "type": "External Entity", "trustLevel": "External", "threatIds": [] }\n` +
     `  ],\n` +
     `  "flows": [\n` +
-    `    { "from": "Browser Client", "to": "CDN Edge", "description": "HTTPS request" },\n` +
-    `    { "from": "CDN Edge", "to": "API Gateway", "description": "filtered request" },\n` +
-    `    { "from": "API Gateway", "to": "Auth Service", "description": "token validation" },\n` +
-    `    { "from": "Auth Service", "to": "Identity Provider", "description": "OIDC assertion" },\n` +
-    `    { "from": "API Gateway", "to": "App Service", "description": "authenticated request" },\n` +
-    `    { "from": "App Service", "to": "Primary DB", "description": "SQL query" },\n` +
-    `    { "from": "App Service", "to": "Cache Layer", "description": "cache read/write" }\n` +
+    `    { "from": "Browser Client", "to": "WAF and CDN", "description": "HTTPS user request", "bidirectional": true },\n` +
+    `    { "from": "WAF and CDN", "to": "API Gateway", "description": "Filtered HTTPS traffic" },\n` +
+    `    { "from": "API Gateway", "to": "Auth Service", "description": "JWT verification" },\n` +
+    `    { "from": "Auth Service", "to": "Identity Provider", "description": "TLS OIDC exchange", "bidirectional": true },\n` +
+    `    { "from": "API Gateway", "to": "Core App Service", "description": "Authenticated API call" },\n` +
+    `    { "from": "Core App Service", "to": "Primary Database", "description": "TLS SQL query", "bidirectional": true },\n` +
+    `    { "from": "Core App Service", "to": "Redis Cache", "description": "Session read/write", "bidirectional": true }\n` +
     `  ],\n` +
-    `  \"narrative\": \"3-4 sentence description covering data flows, trust boundaries, and key security controls\"\n` +
+    `  "narrative": "3-4 sentence architectural summary covering data flows, trust boundary crossings, and key security controls."\n` +
     `}`;
 
   const raw = await callLLM(config, [buildUserMessage(prompt, images)], MAX_TOKENS.DFD);
   const parsed = parseJsonLoose(raw);
   if (!parsed || !Array.isArray(parsed.components)) {
-    return { components: [], flows: [], narrative: "", mermaid: "flowchart LR" };
+    return {
+      components: [],
+      flows: [],
+      narrative: "",
+      mermaid: 'flowchart TB\n  empty["No components generated"]',
+    };
   }
-  // Cap defensively but allow generous limits for detail
-  const components = (parsed.components as { name: string; type: string; trustLevel: string }[])
-    .slice(0, 20);
-  const flows = ((parsed.flows ?? []) as { from: string; to: string; description: string }[])
-    .slice(0, 35);
+
+  // 1. Normalize and deduplicate components (case-insensitive)
+  const rawComponents: DfdComponent[] = [];
+  const canonicalNameByKey = new Map<string, string>();
+
+  for (const rawComp of parsed.components as unknown[]) {
+    if (!rawComp || typeof rawComp !== "object") continue;
+    const c = rawComp as Record<string, unknown>;
+    if (typeof c.name !== "string") continue;
+
+    const cleanName = cleanDfdLabel(c.name, 36);
+    if (!cleanName) continue;
+
+    const key = cleanName.toLowerCase();
+    if (canonicalNameByKey.has(key)) continue;
+
+    const type = normalizeDfdComponentType(c.type);
+    const trustLevel = normalizeDfdTrustLevel(c.trustLevel, type);
+    const threatIds = sanitizeThreatIds(
+      c.threatIds,
+      validThreatIdSet.size > 0 ? validThreatIdSet : undefined
+    );
+
+    canonicalNameByKey.set(key, cleanName);
+    rawComponents.push({
+      name: cleanName,
+      type,
+      trustLevel,
+      ...(threatIds.length > 0 ? { threatIds } : {}),
+    });
+    if (rawComponents.length >= 18) break;
+  }
+
+  // 2. Normalize flows and collapse parallel/opposing edges between the same pair
+  //    into a single clean directional or bidirectional flow (prevents Mermaid label overlap).
+  const flows: DfdFlow[] = [];
+  const flowByPair = new Map<string, DfdFlow>();
+
+  for (const rawFlow of (Array.isArray(parsed.flows) ? parsed.flows : []) as unknown[]) {
+    if (!rawFlow || typeof rawFlow !== "object") continue;
+    const f = rawFlow as Record<string, unknown>;
+    if (typeof f.from !== "string" || typeof f.to !== "string") continue;
+
+    const rawFrom = cleanDfdLabel(f.from, 36);
+    const rawTo = cleanDfdLabel(f.to, 36);
+    if (!rawFrom || !rawTo) continue;
+
+    let from = canonicalNameByKey.get(rawFrom.toLowerCase());
+    if (!from && rawComponents.length < 18) {
+      from = rawFrom;
+      canonicalNameByKey.set(rawFrom.toLowerCase(), from);
+      rawComponents.push({ name: from, type: "Process", trustLevel: "Internal" });
+    }
+
+    let to = canonicalNameByKey.get(rawTo.toLowerCase());
+    if (!to && rawComponents.length < 18) {
+      to = rawTo;
+      canonicalNameByKey.set(rawTo.toLowerCase(), to);
+      rawComponents.push({ name: to, type: "Process", trustLevel: "Internal" });
+    }
+
+    if (!from || !to || from === to) continue;
+
+    const desc =
+      typeof f.description === "string"
+        ? cleanDfdLabel(f.description, 30) || "Data flow"
+        : "Data flow";
+    const wantsBidirectional = Boolean(f.bidirectional);
+
+    const pairKey = [from.toLowerCase(), to.toLowerCase()].sort().join("<->");
+    const existing = flowByPair.get(pairKey);
+
+    if (existing) {
+      // Collapse reverse/duplicate parallel edge into one clean edge
+      if (existing.from.toLowerCase() !== from.toLowerCase() || wantsBidirectional) {
+        existing.bidirectional = true;
+      }
+      existing.description = mergeFlowLabels(existing.description, desc);
+      continue;
+    }
+
+    const entry: DfdFlow = {
+      from,
+      to,
+      description: desc,
+      ...(wantsBidirectional ? { bidirectional: true } : {}),
+    };
+    flowByPair.set(pairKey, entry);
+    flows.push(entry);
+    if (flows.length >= 26) break;
+  }
+
+  // 3. Deterministically reconcile threat IDs across all components
+  const reconciled = reconcileDfdComponentThreats(rawComponents, threats);
+
+  // 4. Prune isolated orphan components (no flows AND no linked threats) so diagrams stay clean
+  const connectedKeys = new Set<string>();
+  for (const f of flows) {
+    connectedKeys.add(f.from.toLowerCase());
+    connectedKeys.add(f.to.toLowerCase());
+  }
+  const components =
+    flows.length > 0
+      ? reconciled.filter(
+          (c) =>
+            connectedKeys.has(c.name.toLowerCase()) ||
+            (c.threatIds && c.threatIds.length > 0)
+        )
+      : reconciled;
+
   return {
     components,
     flows,
-    narrative: clamp(sanitizeText(parsed.narrative ?? ""), 800),
+    narrative: clamp(sanitizeText(typeof parsed.narrative === "string" ? parsed.narrative : ""), 1200),
     mermaid: dfdToMermaid(components, flows),
   };
 }
 
 /**
- * Converts DFD component + flow data into a Mermaid flowchart.
+ * Converts normalized DFD component + flow data into a Mermaid flowchart.
  *
- * Colour palette Ã¢â‚¬â€ derived from brand primary #9C1D26 (crimson):
- *   External Entity : #9C1D26  (brand primary Ã¢â‚¬â€ untrusted actors)
- *   Process         : #6B1219  (dark shade  Ã¢â‚¬â€ system services)
- *   Data Store      : #C4373F  (light shade Ã¢â‚¬â€ persistent storage)
+ * Shapes follow classic Yourdon/DeMarco DFD conventions:
+ *   External Entity : Rectangle        id["Label"]
+ *   Process         : Stadium/Rounded  id(["Label"])
+ *   Data Store      : Cylinder         id[("Label")]
  *
- * Layout Ã¢â‚¬â€ TB (top-to-bottom) rather than LR:
- *   TB avoids long horizontal edge labels overlapping node text,
- *   and maps naturally to trust zone layers stacked topÃ¢â€ â€™bottom.
- *   Subgraphs group nodes into trust zones with dashed crimson borders.
+ * Layout: TB (top-to-bottom) stacked cleanly by architectural tier:
+ *   External Clients -> DMZ Perimeter -> Internal Trust Zone -> Secure Data Zone & External APIs
  */
-function dfdToMermaid(
-  components: { name: string; type: string; trustLevel: string }[],
-  flows: { from: string; to: string; description: string }[]
+export function dfdToMermaid(
+  components: DfdComponent[],
+  flows: DfdFlow[]
 ): string {
-  // Stable short IDs Ã¢â‚¬â€ avoids Mermaid issues with spaces/special chars in names
+  if (components.length === 0) {
+    return 'flowchart TB\n  empty["No DFD components available"]';
+  }
+
   const idMap = new Map<string, string>();
-  components.forEach((c, i) => idMap.set(c.name, `N${i}`));
+  components.forEach((c, i) => idMap.set(c.name.toLowerCase(), getDfdNodeId(i)));
 
-  // Sanitize label: strip quotes and brackets, cap at 28 chars for readability
-  const safe = (s: string) =>
-    s.replace(/"/g, "'")
-     .replace(/[[\]{}|<>\\]/g, " ")
-     .replace(/\s+/g, " ")
-     .trim()
-     .slice(0, 28);
+  // Tally inbound/outbound edges to distinguish Client Actors from External Services cleanly
+  const inboundCount = new Map<string, number>();
+  const outboundCount = new Map<string, number>();
+  for (const f of flows) {
+    const fk = f.from.toLowerCase();
+    const tk = f.to.toLowerCase();
+    outboundCount.set(fk, (outboundCount.get(fk) ?? 0) + 1);
+    inboundCount.set(tk, (inboundCount.get(tk) ?? 0) + 1);
+  }
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Zone groupings Ã¢â‚¬â€ TB order: External Ã¢â€ â€™ DMZ Ã¢â€ â€™ Internal Ã¢â€ â€™ Secure Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
-  const ZONES: Array<{ key: string; label: string; members: typeof components }> = [
-    { key: "External", label: "External Zone",  members: [] },
-    { key: "DMZ",      label: "DMZ Perimeter",  members: [] },
-    { key: "Internal", label: "Internal Zone",  members: [] },
-    { key: "Secure",   label: "Secure Zone",    members: [] },
+  const safeNodeLabel = (s: string) => cleanDfdLabel(s, 34) || "Component";
+  const safeEdgeLabel = (s: string) => cleanDfdLabel(s, 30) || "Data flow";
+
+  type ZoneBucketKey = "ExternalClients" | "DMZ" | "Internal" | "Secure" | "ExternalServices";
+  const ZONES: Array<{
+    key: ZoneBucketKey;
+    label: string;
+    direction?: "LR" | "TB";
+    style: string;
+    members: DfdComponent[];
+  }> = [
+    {
+      key: "ExternalClients",
+      label: "External Clients (Untrusted)",
+      direction: "LR",
+      style: "fill:#fef2f2,stroke:#9C1D26,stroke-width:1.5px,stroke-dasharray:6 4,color:#7f1d1d",
+      members: [],
+    },
+    {
+      key: "DMZ",
+      label: "DMZ Perimeter",
+      style: "fill:#fff7ed,stroke:#c2410c,stroke-width:1.5px,stroke-dasharray:6 4,color:#7c2d12",
+      members: [],
+    },
+    {
+      key: "Internal",
+      label: "Internal Trust Zone",
+      style: "fill:#f8fafc,stroke:#475569,stroke-width:1.5px,stroke-dasharray:6 4,color:#1e293b",
+      members: [],
+    },
+    {
+      key: "Secure",
+      label: "Secure Data Zone",
+      direction: "LR",
+      style: "fill:#f0fdf4,stroke:#15803d,stroke-width:1.5px,stroke-dasharray:6 4,color:#14532d",
+      members: [],
+    },
+    {
+      key: "ExternalServices",
+      label: "External APIs & Providers (Untrusted)",
+      direction: "LR",
+      style: "fill:#fef2f2,stroke:#9C1D26,stroke-width:1.5px,stroke-dasharray:6 4,color:#7f1d1d",
+      members: [],
+    },
   ];
-  const zoneMap = new Map(ZONES.map(z => [z.key, z]));
+
+  const zoneMap = new Map(ZONES.map((z) => [z.key, z]));
   for (const c of components) {
-    const zone = zoneMap.get(c.trustLevel) ?? zoneMap.get("Internal")!;
-    zone.members.push(c);
+    if (c.trustLevel === "External") {
+      const key = c.name.toLowerCase();
+      const bucketKey: ZoneBucketKey = isClientExternalEntity(
+        c,
+        inboundCount.get(key) ?? 0,
+        outboundCount.get(key) ?? 0
+      )
+        ? "ExternalClients"
+        : "ExternalServices";
+      zoneMap.get(bucketKey)!.members.push(c);
+    } else {
+      const zone = zoneMap.get(c.trustLevel) ?? zoneMap.get("Internal")!;
+      zone.members.push(c);
+    }
   }
 
   const lines: string[] = ["flowchart TB"];
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Subgraphs Ã¢â‚¬â€ one per zone with members Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // Subgraphs -- one per non-empty architectural zone
   for (const zone of ZONES) {
     if (zone.members.length === 0) continue;
     lines.push(`  subgraph ${zone.key}["${zone.label}"]`);
+    if (zone.direction) {
+      lines.push(`    direction ${zone.direction}`);
+    }
     for (const c of zone.members) {
-      const id = idMap.get(c.name);
+      const id = idMap.get(c.name.toLowerCase());
       if (!id) continue;
-      const label = safe(c.name);
+      const label = safeNodeLabel(c.name);
       switch (c.type) {
         case "External Entity":
-          // Rectangle Ã¢â‚¬â€ actors outside the system boundary
           lines.push(`    ${id}["${label}"]`);
           break;
         case "Process":
-          // Rounded rectangle Ã¢â‚¬â€ system services / processes
-          lines.push(`    ${id}("${label}")`);
+          lines.push(`    ${id}(["${label}"])`);
           break;
         case "Data Store":
-          // Cylinder Ã¢â‚¬â€ persistent storage
           lines.push(`    ${id}[("${label}")]`);
           break;
-        default:
-          lines.push(`    ${id}["${label}"]`);
       }
     }
     lines.push("  end");
   }
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Edges Ã¢â‚¬â€ labelled arrows, label capped for readability Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+  // Collapse any remaining parallel pairs if dfdToMermaid is called directly
+  const emittedPairs = new Map<string, { fromId: string; toId: string; label: string; bi: boolean }>();
+  const orderedPairs: Array<{ fromId: string; toId: string; label: string; bi: boolean }> = [];
+
   for (const f of flows) {
-    const fromId = idMap.get(f.from);
-    const toId   = idMap.get(f.to);
+    const fromId = idMap.get(f.from.toLowerCase());
+    const toId = idMap.get(f.to.toLowerCase());
     if (!fromId || !toId || fromId === toId) continue;
-    const label = safe(f.description);
-    lines.push(`  ${fromId} -->|"${label}"| ${toId}`);
+
+    const pairKey = [fromId, toId].sort().join("<->");
+    const label = safeEdgeLabel(f.description);
+    const existing = emittedPairs.get(pairKey);
+
+    if (existing) {
+      if (existing.fromId !== fromId || f.bidirectional) existing.bi = true;
+      existing.label = mergeFlowLabels(existing.label, label);
+    } else {
+      const item = { fromId, toId, label, bi: Boolean(f.bidirectional) };
+      emittedPairs.set(pairKey, item);
+      orderedPairs.push(item);
+    }
   }
 
-  // -- Node styles -- #9C1D26 crimson brand palette
-  // External Entity : #9C1D26 (brand primary)
-  lines.push("  classDef entity    fill:#9C1D26,stroke:#6B1219,stroke-width:2px,color:#fff,font-weight:bold");
-  // Process         : #6B1219 (dark crimson shade)
-  lines.push("  classDef process   fill:#6B1219,stroke:#9C1D26,stroke-width:2px,color:#fff,font-weight:bold");
-  // Data Store      : #C4373F (light crimson shade)
-  lines.push("  classDef datastore fill:#C4373F,stroke:#9C1D26,stroke-width:2px,color:#fff,font-weight:bold");
+  for (const edge of orderedPairs) {
+    const arrow = edge.bi ? "<-->" : "-->";
+    lines.push(`  ${edge.fromId} ${arrow}|"${edge.label}"| ${edge.toId}`);
+  }
 
-
-
+  // High-contrast node & trust-boundary styles
+  lines.push("  classDef entity    fill:#9C1D26,stroke:#6B1219,stroke-width:2px,color:#ffffff,font-weight:bold");
+  lines.push("  classDef process   fill:#1e293b,stroke:#0f172a,stroke-width:2px,color:#ffffff,font-weight:bold");
+  lines.push("  classDef datastore fill:#0f766e,stroke:#115e59,stroke-width:2px,color:#ffffff,font-weight:bold");
 
   for (const c of components) {
-    const id = idMap.get(c.name);
+    const id = idMap.get(c.name.toLowerCase());
     if (!id) continue;
-    if (c.type === "External Entity") lines.push(`  class ${id} entity;`);
-    else if (c.type === "Process")    lines.push(`  class ${id} process;`);
-    else if (c.type === "Data Store") lines.push(`  class ${id} datastore;`);
+    if (c.type === "External Entity") lines.push(`  class ${id} entity`);
+    else if (c.type === "Process") lines.push(`  class ${id} process`);
+    else if (c.type === "Data Store") lines.push(`  class ${id} datastore`);
+  }
+
+  for (const zone of ZONES) {
+    if (zone.members.length > 0) {
+      lines.push(`  style ${zone.key} ${zone.style}`);
+    }
   }
 
   return lines.join("\n");
-}
-
-export async function generateGherkin(
-  config: LlmConfig,
-  threats: Threat[],
-  input?: ThreatModelInput
-): Promise<GherkinResult> {
-  const threatList = threats.map((t) => `- [${t.strideCategory}] ${t.threat}: ${t.description}`).join("\n");
-  const appContext = input ? buildContextString(input) : "";
-  const appName = input?.appName || "the application";
-  const prompt =
-    (appContext ? `APPLICATION CONTEXT:\n${appContext}\n\n` : "") +
-    `STRIDE THREATS (${threats.length} total):\n${threatList}` +
-    `\n\nTASK: Generate Gherkin (BDD) acceptance test scenarios that verify ${appName} defends against each threat above.` +
-    `\n\nScenario rules:` +
-    `\n  - Each scenario must be directly testable by a QA engineer using the application's actual stack` +
-    `\n  - "Given" must name a real application state (logged in as X, with Y configured, etc.)` +
-    `\n  - "When" must describe an attacker's concrete action against a specific component or endpoint` +
-    `\n  - "Then" outcomes must be observable system responses, not abstract assertions` +
-    `\n  - Cover both the attack attempt AND the expected defensive response` +
-    `\n  - Generate one scenario per threat` +
-    `\n\nReturn ONLY a JSON object (no prose, no markdown fences):\n` +
-    `{\n` +
-    `  "feature": "Feature: Security Threat Mitigation Verification for ${appName}",\n` +
-    `  "scenarios": [\n` +
-    `    {\n` +
-    `      "title": "Scenario: specific attack scenario title",\n` +
-    `      "given": "Given a specific precondition naming the component or user role",\n` +
-    `      "when": "When the attacker performs the specific action against the specific component",\n` +
-    `      "then": ["Then the system responds with a specific defence", "And the attempt is logged"]\n` +
-    `    }\n` +
-    `  ]\n` +
-    `}`;
-
-  const raw = await callLLM(config, [{ role: "user", content: prompt }], MAX_TOKENS.GHERKIN);
-  const parsed = parseJsonLoose(raw);
-  if (!parsed || !Array.isArray(parsed.scenarios)) {
-    return { feature: "Feature: Threat Mitigation Verification", scenarios: [] };
-  }
-  return {
-    feature: clamp(
-      sanitizeText(parsed.feature ?? "Feature: Threat Mitigation Verification"),
-      200
-    ),
-    scenarios: Array.isArray(parsed.scenarios)
-      ? (parsed.scenarios as unknown[])
-          .filter(
-            (s): s is Record<string, unknown> =>
-              s !== null &&
-              typeof s === "object" &&
-              typeof (s as Record<string, unknown>).title === "string" &&
-              typeof (s as Record<string, unknown>).given === "string" &&
-              typeof (s as Record<string, unknown>).when  === "string" &&
-              Array.isArray((s as Record<string, unknown>).then)
-          )
-          .map((s: Record<string, unknown>) => ({
-            title: clamp(sanitizeText(s.title as string), 200),
-            given: clamp(sanitizeText(s.given as string), 500),
-            when:  clamp(sanitizeText(s.when  as string), 500),
-            then:  (s.then as unknown[])
-              .filter((t): t is string => typeof t === "string")
-              .map((t) => clamp(sanitizeText(t), 500))
-              .slice(0, 10),
-          }))
-          .slice(0, LIMITS.MAX_GHERKIN_SCENARIOS)
-      : [],
-  };
 }
 
 /**
@@ -1550,11 +1565,11 @@ export async function generateRecommendations(
   const prompt =
     `APPLICATION:\n${appSummary}` +
     (images && images.length > 0
-      ? `\nARCHITECTURE DIAGRAMS: ${images.length} diagram(s) attached ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â use them for component-specific recommendations.`
+      ? `\nATTACHED DIAGRAMS (SUPPLEMENTARY CONTEXT): ${images.length} diagram(s) attached -- use them as additional context for component-specific recommendations aligned with DESCRIPTION.`
       : "") +
     `\n\nTHREAT MODEL (${threats.length} threats):\n${threatLines}` +
     (hasNotes
-      ? "\n\nNOTE: Lines marked ANALYST contain security architect context ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â weight these heavily when prioritising."
+      ? "\n\nNOTE: Lines marked ANALYST contain security architect context -- weight these heavily when prioritising."
       : "") +
     `\n\nTASK: Generate concise, prioritized security recommendations. Group related threats where logical. Prioritize by risk level and analyst context. Be specific and actionable.\n\nReturn ONLY a JSON object (no prose, no markdown fences):\n{\n  "recommendations": [\n    {\n      "threatIds": ["T001", "T002"],\n      "action": "one-sentence imperative action",\n      "steps": ["concrete step 1", "step 2", "step 3"],\n      "effort": "Low | Medium | High",\n      "riskReduction": "what risk this eliminates or reduces"\n    }\n  ],\n  "executiveSummary": "2-3 sentence summary of the overall recommendation posture"\n}`;
 
@@ -1638,22 +1653,22 @@ export async function generateSafetyMetrics(
   const prompt =
     `${context}` +
     (images && images.length > 0
-      ? `\n\nARCHITECTURE DIAGRAMS (${images.length} attached): ` +
-        `Use the visible deployment, network zones, and component interactions to assess whether listed controls ` +
-        `would realistically be effective given the actual architecture.`
+      ? `\n\nATTACHED DIAGRAMS -- SUPPLEMENTARY CONTEXT (${images.length} attached): ` +
+        `Use the attached diagram(s) as additional architectural context for deployment, network zones, and component interactions ` +
+        `to assess whether listed controls realistically mitigate the in-scope threats.`
       : "") +
-    `\n\nSECURITY POSTURE EVALUATION ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${threats.length} THREAT(S)` +
+    `\n\nSECURITY POSTURE EVALUATION -- ${threats.length} THREAT(S)` +
     `\n\nYou are evaluating whether the user's CURRENT SECURITY CONTROLS adequately mitigate each identified threat.` +
-    `\nThis is NOT a mitigation recommendation exercise ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it is a factual assessment of what is already in place.` +
+    `\nThis is NOT a mitigation recommendation exercise -- it is a factual assessment of what is already in place.` +
     `\n\nVERDICT DEFINITIONS (strictly apply these):` +
-    `\n  SAFE           ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Controls FULLY and DEMONSTRABLY mitigate this threat. Coverage is unambiguous and defence-in-depth exists.` +
-    `\n  PARTIALLY_SAFE ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Controls exist but leave meaningful gaps: attack surface remains, edge cases are unaddressed, or only one layer of defence covers a multi-layer threat.` +
-    `\n  UNSAFE         ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â No controls are listed, controls are irrelevant to this specific threat, or the listed controls are clearly insufficient.` +
+    `\n  SAFE           -- Controls FULLY and DEMONSTRABLY mitigate this threat. Coverage is unambiguous and defence-in-depth exists.` +
+    `\n  PARTIALLY_SAFE -- Controls exist but leave meaningful gaps: attack surface remains, edge cases are unaddressed, or only one layer of defence covers a multi-layer threat.` +
+    `\n  UNSAFE         -- No controls are listed, controls are irrelevant to this specific threat, or the listed controls are clearly insufficient.` +
     `\n\nEVALUATION CRITERIA:` +
     `\n  1. Judge against the SPECIFIC STRIDE category, attack vector, and MITRE ATT&CK technique(s) for each threat` +
     `\n  2. A control valid for one layer (e.g., network firewall) does NOT automatically cover application-layer or identity-layer threats` +
-    `\n  3. Err toward PARTIALLY_SAFE over SAFE ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â real security requires defence-in-depth, not a single control` +
-    `\n  4. If no controls are provided for a threat, the verdict MUST be UNSAFE ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no exceptions` +
+    `\n  3. Err toward PARTIALLY_SAFE over SAFE -- real security requires defence-in-depth, not a single control` +
+    `\n  4. If no controls are provided for a threat, the verdict MUST be UNSAFE -- no exceptions` +
     `\n  5. Assess control QUALITY, not just presence: "we use HTTPS" is not a control for a SQL injection threat` +
     `\n  6. Reasoning must cite BOTH the specific control listed AND the specific gap or why the control is adequate` +
     `\n\nTHREATS AND CURRENT CONTROLS:\n${threatControlPairs}` +
@@ -1664,8 +1679,8 @@ export async function generateSafetyMetrics(
     `      "threatId": "T001",\n` +
     `      "threat": "verbatim threat title from the threat model",\n` +
     `      "verdict": "SAFE" | "PARTIALLY_SAFE" | "UNSAFE",\n` +
-    `      \"reasoning\": \"3-5 sentences citing: (1) what control is in place, (2) what the control does/doesn't cover for this specific STRIDE vector, (3) whether compensating controls exist, (4) exploitability given the deployment context\",\n` +
-    `      "gaps": ["Specific gap 1 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â what is missing or insufficient", "Specific gap 2"]\n` +
+    `      "reasoning": "3-5 sentences citing: (1) what control is in place, (2) what the control does/doesn't cover for this specific STRIDE vector, (3) whether compensating controls exist, (4) exploitability given the deployment context",\n` +
+    `      "gaps": ["Specific gap 1 -- what is missing or insufficient", "Specific gap 2"]\n` +
     `    }\n` +
     `  ],\n` +
     `  "overallPosture": "2-3 sentence executive assessment of the aggregate security posture: what proportion of threats are covered, what the most critical uncovered areas are, and a one-sentence recommended priority action"\n` +

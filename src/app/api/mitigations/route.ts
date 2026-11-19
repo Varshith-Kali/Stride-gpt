@@ -53,7 +53,13 @@ export async function POST(req: NextRequest) {
     }
 
     const threats = sanitizeThreats(data.threats);
-    // Optional multimodal images — session-only, never stored
+    if (threats.length === 0) {
+      return Response.json(
+        { error: "No valid threats found." },
+        { status: 400 }
+      );
+    }
+    // Optional multimodal images -- session-only, never stored
     const images = validateImages(data.images);
 
     const result = await generateMitigations(config, input, threats, images.length > 0 ? images : undefined);

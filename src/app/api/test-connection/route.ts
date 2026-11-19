@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
       if (
         rawConfig?.provider === "openai" &&
         typeof rawConfig?.apiKey === "string" &&
-        rawConfig.apiKey.trim().length >= 40
+        rawConfig.apiKey.trim().length >= 10
       ) {
         config = {
           provider: "openai",
@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Minimal test call to OpenAI Responses API — 16 output tokens (the minimum allowed).
+    // Minimal test call to OpenAI Responses API -- 16 output tokens (the minimum allowed).
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);
     let res: Response;
@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
 
     const text = await res.text().catch(() => "");
 
-    // 401 — invalid or revoked key
+    // 401 -- invalid or revoked key
     if (res.status === 401) {
       return Response.json({
         ok: false,
@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 403 — insufficient permissions for this model
+    // 403 -- insufficient permissions for this model
     if (res.status === 403) {
       return Response.json({
         ok: false,
@@ -115,7 +115,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 404 — model not found (likely internal model not yet provisioned)
+    // 404 -- model not found (likely internal model not yet provisioned)
     if (res.status === 404) {
       return Response.json({
         ok: false,
@@ -124,7 +124,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 429 — rate limit or quota exceeded
+    // 429 -- rate limit or quota exceeded
     if (res.status === 429) {
       return Response.json({
         ok: false,

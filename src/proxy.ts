@@ -1,5 +1,5 @@
 /**
- * Next.js Edge Proxy — per-request security hardening.
+ * Next.js Edge Proxy -- per-request security hardening.
  *
  * In Next.js 16+, this file is named "proxy.ts" and MUST export a function
  * named "proxy" (replaces the old "middleware.ts" / "middleware" convention).
@@ -15,7 +15,7 @@
  * Security note:
  *   A nonce-based CSP is strictly stronger than 'unsafe-inline':
  *   - Each nonce is a random, single-use 16-byte value (base64-encoded).
- *   - An attacker who injects a <script> tag cannot know the nonce —
+ *   - An attacker who injects a <script> tag cannot know the nonce --
  *     their script is blocked even without 'unsafe-inline'.
  *   We retain 'unsafe-inline' only as a fallback for very old browsers
  *   (IE11 / ancient Safari). Modern browsers honour the nonce and ignore
@@ -38,7 +38,7 @@ export const config = {
 
 /**
  * Next.js 16 proxy handler.
- * MUST be exported as "proxy" — this is the new convention enforced by Next.js 16.
+ * MUST be exported as "proxy" -- this is the new convention enforced by Next.js 16.
  */
 export function proxy(req: NextRequest): NextResponse {
   const requestHeaders = new Headers(req.headers);
@@ -47,7 +47,7 @@ export function proxy(req: NextRequest): NextResponse {
     request: { headers: requestHeaders },
   });
 
-  // Set a per-request trace ID — lets users report issues precisely
+  // Set a per-request trace ID -- lets users report issues precisely
   // without exposing server internals. Logged at the app layer.
   res.headers.set("X-Request-ID", crypto.randomUUID());
 

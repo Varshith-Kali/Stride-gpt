@@ -5,7 +5,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Shield,
   Wrench,
-  Gauge,
   Workflow,
   Loader2,
   AlertCircle,
@@ -18,12 +17,13 @@ import {
   Globe,
   Cloud,
   Users,
-  KeyRound,
   FileSpreadsheet,
   ImagePlus,
   X,
   ChevronDown,
   ChevronUp,
+  RefreshCw,
+  ArrowLeftRight,
 } from "lucide-react";
 import { useImageUpload } from "@/hooks/use-image-upload";
 import type { UploadedImage } from "@/hooks/use-image-upload";
@@ -51,129 +51,31 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { BrandMark } from "@/components/brand-mark";
-import { MermaidRenderer } from "@/components/mermaid-renderer";
+import { MermaidRenderer, type DiagramNodeTags } from "@/components/mermaid-renderer";
+import {
+  getDfdNodeId,
+  reconcileDfdComponentThreats,
+} from "@/lib/dfd-helpers";
+import type {
+  AppType,
+  AuthMethod,
+  Threat,
+  ThreatModelResult,
+  MitigationResult,
+  DfdResult,
+  DfdTrustLevel,
+  SafetyMetricsResult,
+} from "@/lib/stride-engine";
 import {
   threatsToMarkdown,
   threatsToCSV,
   mitigationsToMarkdown,
   mitigationsToCSV,
-  dreadToMarkdown,
-  dreadToCSV,
   dfdToMarkdown,
-  attackTreeToMarkdown,
-  gherkinToText,
   downloadText,
   downloadExcel,
   type ExcelBundle,
 } from "@/lib/export-utils";
-
-type AppType =
-  | "Web application"
-  | "Mobile application"
-  | "Desktop application"
-  | "Cloud service/API"
-  | "IoT device"
-  | "Generative AI application"
-  | "Agentic AI application"
-  | "Microservice architecture"
-  | "Other";
-
-type AuthMethod =
-  | "None"
-  | "Username/password"
-  | "OAuth 2.0"
-  | "SAML"
-  | "SSO"
-  | "API keys"
-  | "JWT"
-  | "Biometric"
-  | "Certificate-based";
-
-
-interface Threat {
-  id: string;
-  category: string;
-  threat: string;
-  component: string;
-  description: string;
-  strideCategory:
-    | "Spoofing"
-    | "Tampering"
-    | "Repudiation"
-    | "Information Disclosure"
-    | "Denial of Service"
-    | "Elevation of Privilege";
-  mitreAttack?: string[];
-  risk: "Low" | "Medium" | "High" | "Critical";
-}
-
-interface ThreatModelResult {
-  threats: Threat[];
-  summary: string;
-  architectureNotes: string;
-  detectedPatterns: string[];
-}
-
-interface AttackTreeNode {
-  goal: string;
-  subgoals: AttackTreeNode[];
-}
-
-interface AttackTreeResult {
-  root: AttackTreeNode;
-  mermaid: string;
-  narrative: string;
-}
-
-
-interface MitigationResult {
-  mitigations: {
-    threat: string;
-    mitigation: string;
-    priority: "Low" | "Medium" | "High";
-    owaspReference?: string;
-  }[];
-  hardeningChecklist: string[];
-}
-
-interface DreadScore {
-  threat: string;
-  damage: number;
-  reproducibility: number;
-  exploitability: number;
-  affectedUsers: number;
-  discoverability: number;
-  total: number;
-  severity: "Low" | "Medium" | "High" | "Critical";
-}
-
-interface DfdResult {
-  mermaid: string;
-  components: { name: string; type: string; trustLevel: string }[];
-  flows: { from: string; to: string; description: string }[];
-  narrative: string;
-}
-
-interface GherkinResult {
-  feature: string;
-  scenarios: { title: string; given: string; when: string; then: string[] }[];
-}
-
-/** Safety verdict per threat — returned by the /api/safety-metrics endpoint. */
-type SafetyVerdict = "SAFE" | "PARTIALLY_SAFE" | "UNSAFE";
-
-interface SafetyMetric {
-  threatId: string;
-  threat: string;
-  verdict: SafetyVerdict;
-  reasoning: string;
-  gaps: string[];
-}
-
-interface SafetyMetricsResult {
-  metrics: SafetyMetric[];
-  overallPosture: string;
-}
 
 const STRIDE_CATEGORIES = [
   {
@@ -293,7 +195,6 @@ const EXAMPLE_APPS = [
 type TabId =
   | "threats"
   | "mitigations"
-  | "dread"
   | "dfd"
   | "safety";
 
@@ -314,12 +215,6 @@ const TABS: {
     label: "Mitigations",
     icon: Wrench,
     description: "Concrete countermeasures",
-  },
-  {
-    id: "dread",
-    label: "DREAD Score",
-    icon: Gauge,
-    description: "Risk prioritization",
   },
   {
     id: "dfd",
@@ -362,6 +257,7 @@ export function ThreatModelStudio({
   const [appName, setAppName] = useState("");
   const [appType, setAppType] = useState<AppType>("Web application");
   const [description, setDescription] = useState("");
+  const deferredDescription = useDeferredValue(description);
   const [authentication, setAuthentication] = useState<AuthMethod[]>(["JWT"]);
   const [internetFacing, setInternetFacing] = useState(true);
   const [sensitiveData, setSensitiveData] = useState(true);
@@ -371,14 +267,14 @@ export function ThreatModelStudio({
   const [activeTab, setActiveTab] = useState<TabId>("threats");
   const [loading, setLoading] = useState<TabId | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Streaming progress — chars received from SSE stream during threat model generation
+  // Streaming progress -- chars received from SSE stream during threat model generation
   const [streamProgress, setStreamProgress] = useState(0);
 
   const [threatModel, setThreatModel] = useState<ThreatModelResult | null>(null);
   const [mitigations, setMitigations] = useState<MitigationResult | null>(null);
-  const [dreadScores, setDreadScores] = useState<DreadScore[] | null>(null);
   const [dfd, setDfd] = useState<DfdResult | null>(null);
   const [safetyMetrics, setSafetyMetrics] = useState<SafetyMetricsResult | null>(null);
+  const [highlightedThreatId, setHighlightedThreatId] = useState<string | null>(null);
   // Per-threat current controls -- keyed by threat ID. Session-only state.
   const [currentControls, setCurrentControls] = useState<Record<string, string>>({});
 
@@ -387,7 +283,7 @@ export function ThreatModelStudio({
 
   const resultsRef = useRef<HTMLDivElement>(null);
 
-  /** Reset ALL analysis state — form fields + results + controls + images.
+  /** Reset ALL analysis state -- form fields + results + controls + images.
    *  API key is intentionally NOT touched (session-only, cleared only on tab close/refresh). */
   const resetStudio = useCallback(() => {
     setAppName("");
@@ -401,11 +297,12 @@ export function ThreatModelStudio({
     setActiveTab("threats");
     setLoading(null);
     setError(null);
+    setStreamProgress(0);
     setThreatModel(null);
     setMitigations(null);
-    setDreadScores(null);
     setDfd(null);
     setSafetyMetrics(null);
+    setHighlightedThreatId(null);
     setCurrentControls({});
     clearImages();
     // Scroll back to the top of the studio
@@ -416,6 +313,42 @@ export function ThreatModelStudio({
   useEffect(() => {
     onReset?.(resetStudio);
   }, [onReset, resetStudio]);
+
+  const navigateToThreat = useCallback((threatId: string) => {
+    const normalized = threatId.trim().toUpperCase();
+    setHighlightedThreatId(normalized);
+    setActiveTab("threats");
+  }, []);
+
+  // Scroll smoothly to a threat card after switching from DFD -> Threat Model tab
+  useEffect(() => {
+    if (activeTab !== "threats" || !highlightedThreatId) return;
+
+    let attempts = 0;
+    let rafOrTimer: ReturnType<typeof setTimeout> | null = null;
+    let clearTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const tryScroll = () => {
+      const el = document.getElementById(`threat-card-${highlightedThreatId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        clearTimer = setTimeout(() => setHighlightedThreatId(null), 2600);
+        return;
+      }
+      if (attempts < 16) {
+        attempts++;
+        rafOrTimer = setTimeout(tryScroll, 50);
+      }
+    };
+
+    // Wait slightly for AnimatePresence mode="wait" (250ms) to mount ThreatsTab
+    rafOrTimer = setTimeout(tryScroll, 280);
+
+    return () => {
+      if (rafOrTimer) clearTimeout(rafOrTimer);
+      if (clearTimer) clearTimeout(clearTimer);
+    };
+  }, [activeTab, highlightedThreatId]);
 
   const loadExample = (idx: number) => {
     const ex = EXAMPLE_APPS[idx];
@@ -486,11 +419,11 @@ export function ThreatModelStudio({
         throw new Error(err.error || `Failed to generate threat model (${res.status})`);
       }
 
-      // ─── Read the SSE stream ──────────────────────────────────────────
+      // --- Read the SSE stream ------------------------------------------
       // The route sends `data: {...}\n\n` events:
-      //   { type: "progress", chars: N }  — live token counter
-      //   { type: "done",     data: {...} } — final parsed result
-      //   { type: "error",    message: "..." } — LLM error
+      //   { type: "progress", chars: N }  -- live token counter
+      //   { type: "done",     data: {...} } -- final parsed result
+      //   { type: "error",    message: "..." } -- LLM error
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let lineBuffer = "";
@@ -498,12 +431,15 @@ export function ThreatModelStudio({
 
       outer: while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (value) {
+          lineBuffer += decoder.decode(value, { stream: !done });
+        } else if (done) {
+          lineBuffer += decoder.decode();
+        }
 
-        lineBuffer += decoder.decode(value, { stream: true });
-        // SSE events are delimited by double newlines
+        // SSE events are delimited by double newlines; flush remaining buffer when done
         const parts = lineBuffer.split("\n\n");
-        lineBuffer = parts.pop() ?? "";
+        lineBuffer = done ? "" : (parts.pop() ?? "");
 
         for (const part of parts) {
           const line = part.trim();
@@ -522,6 +458,8 @@ export function ThreatModelStudio({
             throw new Error(evt.message || "Failed to generate threat model");
           }
         }
+
+        if (done) break;
       }
 
       if (!finalResult) {
@@ -531,8 +469,8 @@ export function ThreatModelStudio({
       setThreatModel(finalResult);
       // Reset downstream artifacts and current controls on new threat model
       setMitigations(null);
-      setDreadScores(null);
       setDfd(null);
+      setSafetyMetrics(null);
       setCurrentControls({});
       toast.success(
         `Identified ${finalResult.threats.length} threats across STRIDE categories`
@@ -594,48 +532,6 @@ export function ThreatModelStudio({
     }
   }, [config, onOpenConfig, threatModel, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants, images]);
 
-  const generateDread = useCallback(async () => {
-    if (!requireConfig()) return;
-    if (!threatModel || threatModel.threats.length === 0) {
-      toast.error("Generate a threat model first.");
-      return;
-    }
-    setLoading("dread");
-    setError(null);
-    setActiveTab("dread");
-    try {
-      const res = await fetch("/api/dread", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          config,
-          input: buildInput(),
-          threats: threatModel.threats,
-          images: images.length > 0
-            ? images.map((img) => ({ mimeType: img.mimeType, dataUrl: img.dataUrl, name: img.name }))
-            : undefined,
-        }),
-      });
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(errBody.error || `Failed to generate DREAD scores (${res.status})`);
-      }
-      const data: DreadScore[] = await res.json();
-      setDreadScores(data);
-      toast.success("DREAD risk scores computed");
-      setTimeout(
-        () => resultsRef.current?.scrollIntoView({ behavior: "smooth" }),
-        200
-      );
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Unexpected error computing DREAD scores";
-      setError(msg);
-      toast.error(msg);
-    } finally {
-      setLoading(null);
-    }
-  }, [config, onOpenConfig, threatModel, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants, images]);
-
   const generateDfd = useCallback(async () => {
     if (!requireConfig()) return;
     if (description.trim().length < 10) {
@@ -652,6 +548,7 @@ export function ThreatModelStudio({
         body: JSON.stringify({
           config,
           input: buildInput(),
+          threats: threatModel?.threats,
           images: images.length > 0
             ? images.map((img) => ({ mimeType: img.mimeType, dataUrl: img.dataUrl, name: img.name }))
             : undefined,
@@ -675,7 +572,7 @@ export function ThreatModelStudio({
     } finally {
       setLoading(null);
     }
-  }, [config, onOpenConfig, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants, images]);
+  }, [config, onOpenConfig, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants, images, threatModel]);
 
   /** Generate Safety Metrics -- evaluates each threat against its current control. */
   const handleGenerateSafety = useCallback(async () => {
@@ -721,9 +618,9 @@ export function ThreatModelStudio({
     }
   }, [config, onOpenConfig, appName, appType, description, authentication, internetFacing, sensitiveData, usesCloud, hasMultipleTenants, images, threatModel, currentControls]);
 
-  const hasAnyResult = threatModel || mitigations || dreadScores || dfd || safetyMetrics;
+  const hasAnyResult = threatModel || mitigations || dfd || safetyMetrics;
 
-  // useMemo: only recompute when safetyMetrics changes — not on every keystroke.
+  // useMemo: only recompute when safetyMetrics changes -- not on every keystroke.
   const safetyMetricsMap = useMemo(
     () =>
       safetyMetrics
@@ -754,7 +651,7 @@ export function ThreatModelStudio({
               Analysis Workspace
             </h2>
             <p className="text-xs sm:text-sm text-neutral-500 mt-1 leading-relaxed">
-              Describe the system · generate threat models, mitigations, DREAD scores, safety metrics, and data flow diagrams.
+              Describe the system &middot; generate threat models, mitigations, safety metrics, and data flow diagrams.
             </p>
           </div>
           <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-3 flex-wrap shrink-0">
@@ -782,6 +679,8 @@ export function ThreatModelStudio({
                     try {
                       const payload = {
                         threatModel,
+                        mitigations,
+                        dfd,
                         currentControls,
                         safetyMetrics,
                       };
@@ -820,25 +719,28 @@ export function ThreatModelStudio({
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 lg:gap-8">
             {/* Left: form */}
             <div className="lg:col-span-3 space-y-5 sm:space-y-6 min-w-0">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
-                <h3 className="text-title text-neutral-900 shrink-0">
+              <div className="space-y-2.5">
+                <h3 className="text-title text-neutral-900">
                   Application Profile
                 </h3>
-                <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                  <span className="text-xs text-neutral-500 mr-0.5">
+                <div className="flex items-start gap-2">
+                  <span className="text-xs font-medium text-neutral-400 h-7 inline-flex items-center shrink-0">
                     Try:
                   </span>
-                  {EXAMPLE_APPS.map((ex, i) => (
-                    <Button
-                      key={ex.label}
-                      variant="outline"
-                      size="sm"
-                      onClick={() => loadExample(i)}
-                      className="h-7 px-2.5 sm:px-3 text-xs rounded-full whitespace-nowrap"
-                    >
-                      {ex.label}
-                    </Button>
-                  ))}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {EXAMPLE_APPS.map((ex, i) => (
+                      <Button
+                        key={ex.label}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => loadExample(i)}
+                        className="h-7 px-2.5 text-xs font-medium text-neutral-700 border-neutral-200 hover:border-neutral-400 hover:bg-neutral-50 rounded-full whitespace-nowrap"
+                      >
+                        {ex.label}
+                      </Button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -888,13 +790,11 @@ export function ThreatModelStudio({
                   id="description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Describe the application: what it does, who uses it, key technologies, integrations, data flows, trust boundaries..."
+                  placeholder="Describe the application or review scope (primary input). If you include specific recommendations, suggestions, or a targeted focus area such as an API integration, threat modeling will center around those first; attached diagrams provide extra architectural context..."
                   className="min-h-[140px] rounded-xl resize-y"
                 />
                 <div className="flex items-center justify-between text-xs text-neutral-400">
-                  {/* useDeferredValue: counter update is deferred so it never
-                      blocks the textarea's synchronous keystroke handler. */}
-                  <span>{useDeferredValue(description).length} characters</span>
+                  <span>{deferredDescription.length} characters</span>
                   {description.length > 0 && description.length < 10 && (
                     <span className="text-amber-600">
                       Add a few more details
@@ -949,7 +849,7 @@ export function ThreatModelStudio({
                 <ToggleRow
                   icon={Lock}
                   label="Processes sensitive data"
-                  description="PII, PHI, PCI, credentials, etc."
+                  description="PII, PHI, PCI, etc."
                   checked={sensitiveData}
                   onCheckedChange={setSensitiveData}
                 />
@@ -1015,8 +915,6 @@ export function ThreatModelStudio({
                           return !!threatModel;
                         case "mitigations":
                           return !!mitigations;
-                        case "dread":
-                          return !!dreadScores;
                         case "dfd":
                           return !!dfd;
                         case "safety":
@@ -1066,8 +964,9 @@ export function ThreatModelStudio({
                       result={threatModel}
                       loading={loading === "threats"}
                       streamProgress={streamProgress}
+                      highlightedThreatId={highlightedThreatId}
                       onNext={generateMitigations}
-                      onDread={generateDread}
+                      onDfd={generateDfd}
                       currentControls={currentControls}
                       onCurrentControlsChange={(id, val) =>
                         setCurrentControls((prev) => ({ ...prev, [id]: val }))
@@ -1083,19 +982,14 @@ export function ThreatModelStudio({
                       bundle={excelBundle}
                     />
                   )}
-                  {activeTab === "dread" && (
-                    <DreadTab
-                      result={dreadScores}
-                      loading={loading === "dread"}
-                      onGenerate={generateDread}
-                      bundle={excelBundle}
-                    />
-                  )}
                   {activeTab === "dfd" && (
                     <DfdTab
                       result={dfd}
+                      threats={threatModel?.threats}
                       loading={loading === "dfd"}
                       onGenerate={generateDfd}
+                      onSelectThreat={navigateToThreat}
+                      appName={appName}
                       bundle={excelBundle}
                     />
                   )}
@@ -1341,7 +1235,7 @@ function EmptyState() {
       <p className="text-sm sm:text-base text-neutral-500 max-w-md mx-auto leading-relaxed">
         Fill in the application profile above, then click{" "}
         <span className="font-medium text-neutral-900">Generate Threat Model</span>{" "}
-        to start. Results for all six analyses live in the tabs.
+        to start. Results for Threat Model, Mitigations, Data Flow, and Safety Metrics live in the tabs.
       </p>
     </div>
   );
@@ -1353,18 +1247,20 @@ function ThreatsTab({
   result,
   loading,
   streamProgress,
+  highlightedThreatId,
   onNext,
-  onDread,
+  onDfd,
   currentControls,
   onCurrentControlsChange,
   bundle,
 }: {
   result: ThreatModelResult | null;
   loading: boolean;
-  /** Chars received from SSE stream so far — 0 when not streaming. */
+  /** Chars received from SSE stream so far -- 0 when not streaming. */
   streamProgress?: number;
+  highlightedThreatId?: string | null;
   onNext: () => void;
-  onDread: () => void;
+  onDfd: () => void;
   currentControls: Record<string, string>;
   onCurrentControlsChange: (id: string, val: string) => void;
   bundle: ExcelBundle;
@@ -1446,14 +1342,18 @@ function ThreatsTab({
 
       {/* Threat list */}
       <div className="space-y-3">
-        {result.threats.map((t, i) => (
-          <ThreatCard
-            key={t.id || i}
-            threat={t}
-            currentControl={currentControls[t.id] ?? ""}
-            onCurrentControlChange={(val) => onCurrentControlsChange(t.id, val)}
-          />
-        ))}
+        {result.threats.map((t, i) => {
+          const normalizedId = t.id.trim().toUpperCase();
+          return (
+            <ThreatCard
+              key={normalizedId || i}
+              threat={t}
+              isHighlighted={highlightedThreatId === normalizedId}
+              currentControl={currentControls[t.id] ?? ""}
+              onCurrentControlChange={(val) => onCurrentControlsChange(t.id, val)}
+            />
+          );
+        })}
       </div>
 
       {result.architectureNotes && (
@@ -1477,12 +1377,12 @@ function ThreatsTab({
           Generate Mitigations
         </Button>
         <Button
-          onClick={onDread}
+          onClick={onDfd}
           variant="outline"
           className="w-full sm:w-auto rounded-full border-neutral-300"
         >
-          <Gauge className="w-4 h-4" />
-          Score with DREAD
+          <Workflow className="w-4 h-4" />
+          Generate Data Flow Diagram
         </Button>
       </div>
     </div>
@@ -1491,17 +1391,27 @@ function ThreatsTab({
 
 function ThreatCard({
   threat,
+  isHighlighted = false,
   currentControl,
   onCurrentControlChange,
 }: {
   threat: Threat;
+  isHighlighted?: boolean;
   currentControl: string;
   onCurrentControlChange: (val: string) => void;
 }) {
   const [showControl, setShowControl] = useState(false);
   const cat = STRIDE_CATEGORIES.find((c) => c.name === threat.strideCategory);
+  const normalizedThreatId = threat.id.trim().toUpperCase();
   return (
-    <Card className="p-4 sm:p-5 apple-card">
+    <Card
+      id={`threat-card-${normalizedThreatId}`}
+      className={`p-4 sm:p-5 apple-card scroll-mt-28 transition-all duration-300 ${
+        isHighlighted
+          ? "ring-2 ring-neutral-900 border-neutral-900 bg-neutral-50/70 shadow-md"
+          : ""
+      }`}
+    >
       <div className="flex items-start gap-3 sm:gap-4">
         <div
           className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl ${
@@ -1517,6 +1427,11 @@ function ThreatCard({
                 {threat.id}
               </span>
               <span className="text-xs text-neutral-500 break-words">{threat.category}</span>
+              {isHighlighted && (
+                <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-neutral-900 text-white">
+                  Linked from DFD
+                </span>
+              )}
             </div>
             <span
               className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${riskColor(
@@ -1533,7 +1448,7 @@ function ThreatCard({
             {threat.description}
           </p>
 
-          {/* Component + MITRE metadata — its own dedicated row */}
+          {/* Component + MITRE metadata -- its own dedicated row */}
           <div className="flex items-center gap-x-3 gap-y-1.5 flex-wrap text-xs pb-1">
             <span className="text-neutral-500 break-words">
               <span className="text-neutral-400">Component:</span>{" "}
@@ -1554,7 +1469,7 @@ function ThreatCard({
             )}
           </div>
 
-          {/* Current controls — always a full-width block below metadata, left-anchored */}
+          {/* Current controls -- always a full-width block below metadata, left-anchored */}
           <div className="mt-3 pt-3 border-t border-neutral-100">
             <button
               type="button"
@@ -1588,8 +1503,8 @@ function ThreatCard({
                     onChange={(e) => onCurrentControlChange(e.target.value)}
                     placeholder={`Describe existing controls for ${threat.id}... e.g. "MFA enforced on all admin accounts via Azure AD Conditional Access; WAF rules block common injection patterns"`}
                     maxLength={500}
-                    rows={5}
-                    className="mt-2 w-full text-xs text-neutral-700 placeholder-neutral-400 bg-neutral-50 border border-neutral-200 rounded-lg p-3 resize-y focus:outline-none focus:ring-1 focus:ring-neutral-400 min-h-[110px]"
+                    rows={3}
+                    className="mt-2 w-full text-xs text-neutral-700 placeholder-neutral-400 bg-neutral-50 border border-neutral-200 rounded-lg p-3 resize-y focus:outline-none focus:ring-1 focus:ring-neutral-400 min-h-[84px]"
                   />
                   <div className="flex justify-between items-center gap-2 mt-1 flex-wrap">
                     <span className="text-[10px] text-neutral-400">
@@ -1604,121 +1519,6 @@ function ThreatCard({
         </div>
       </div>
     </Card>
-  );
-}
-
-/* ---------------- Attack Tree Tab ---------------- */
-
-function AttackTreeTab({
-  result,
-  loading,
-  onGenerate,
-  bundle,
-}: {
-  result: AttackTreeResult | null;
-  loading: boolean;
-  onGenerate: () => void;
-  bundle: ExcelBundle;
-}) {
-  if (loading)
-    return <LoadingBlock label="Building adversary attack tree" />;
-  if (!result)
-    return (
-      <PromptToGenerate
-        title="Attack Tree"
-        description="Decompose the attacker's primary goal into concrete sub-goals and techniques."
-        onGenerate={onGenerate}
-      />
-    );
-  return (
-    <div className="space-y-6">
-      <Card className="p-6 sm:p-8 apple-card">
-        <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
-          <div>
-            <h3 className="text-title text-neutral-900 mb-1">Attack Tree</h3>
-            <p className="text-sm text-neutral-500">
-              Adversary goal decomposition - root goal flows down to leaf techniques.
-            </p>
-          </div>
-          <ExportMenu
-            label="Attack Tree"
-            formats={{
-              xlsx: { bundle, filename: "attack-tree-report.xlsx" },
-              markdown: {
-                content: attackTreeToMarkdown(result),
-                filename: "attack-tree.md",
-              },
-              mermaid: {
-                content: result.mermaid,
-                filename: "attack-tree.mmd",
-              },
-              json: {
-                content: JSON.stringify(result, null, 2),
-                filename: "attack-tree.json",
-              },
-            }}
-          />
-        </div>
-        <div className="mt-5 rounded-xl bg-white border border-neutral-200 p-4">
-          <MermaidRenderer source={result.mermaid} />
-        </div>
-        <details className="mt-4 group">
-          <summary className="cursor-pointer text-sm font-medium text-neutral-700 hover:text-neutral-900 flex items-center gap-2">
-            <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" />
-            View Mermaid source
-          </summary>
-          <pre className="mt-3 p-4 rounded-xl bg-neutral-50 border border-neutral-200 text-xs font-mono text-neutral-700 overflow-x-auto">
-            {result.mermaid}
-          </pre>
-        </details>
-        <details className="mt-3 group">
-          <summary className="cursor-pointer text-sm font-medium text-neutral-700 hover:text-neutral-900 flex items-center gap-2">
-            <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" />
-            View as nested tree
-          </summary>
-          <div className="mt-3 pl-4 border-l-2 border-neutral-200">
-            <TreeView node={result.root} depth={0} />
-          </div>
-        </details>
-      </Card>
-      {result.narrative && (
-        <Card className="p-6 apple-card">
-          <h4 className="text-sm font-semibold text-neutral-900 mb-3">
-            Attack Path Narrative
-          </h4>
-          <p className="text-sm text-neutral-600 leading-relaxed whitespace-pre-wrap">
-            {result.narrative}
-          </p>
-        </Card>
-      )}
-    </div>
-  );
-}
-
-function TreeView({
-  node,
-  depth,
-}: {
-  node: AttackTreeNode;
-  depth: number;
-}) {
-  return (
-    <div className="space-y-1">
-      <div
-        className={`text-sm ${
-          depth === 0
-            ? "font-semibold text-neutral-900"
-            : "text-neutral-700"
-        }`}
-        style={{ paddingLeft: `${depth * 16}px` }}
-      >
-        {depth > 0 && <span className="text-neutral-400 mr-2">|--</span>}
-        {node.goal}
-      </div>
-      {(node.subgoals || []).map((sg: AttackTreeNode, i: number) => (
-        <TreeView key={i} node={sg} depth={depth + 1} />
-      ))}
-    </div>
   );
 }
 
@@ -1828,134 +1628,91 @@ function MitigationsTab({
   );
 }
 
-/* ---------------- DREAD Tab ---------------- */
-
-function DreadTab({
-  result,
-  loading,
-  onGenerate,
-  bundle,
-}: {
-  result: DreadScore[] | null;
-  loading: boolean;
-  onGenerate: () => void;
-  bundle: ExcelBundle;
-}) {
-  if (loading) return <LoadingBlock label="Scoring with DREAD model" />;
-  if (!result || result.length === 0)
-    return (
-      <PromptToGenerate
-        title="DREAD Risk Scores"
-        description="Score each threat on Damage, Reproducibility, Exploitability, Affected Users, Discoverability."
-        onGenerate={onGenerate}
-        requiresThreats
-      />
-    );
-
-  const sorted = [...result].sort((a, b) => b.total - a.total);
-  const max = 50;
-
-  return (
-    <div className="space-y-6">
-      <Card className="p-4 sm:p-6 lg:p-8 apple-card">
-        <div className="flex items-start justify-between gap-4 flex-wrap mb-6">
-          <div className="min-w-0">
-            <h3 className="text-title text-neutral-900 mb-1">
-              DREAD Risk Scoring
-            </h3>
-            <p className="text-xs sm:text-sm text-neutral-500">
-              Prioritized by total DREAD score (max 50). Higher = more severe.
-            </p>
-          </div>
-          <ExportMenu
-            label="DREAD Scores"
-            formats={{
-              xlsx: { bundle, filename: "dread-report.xlsx" },
-              markdown: {
-                content: dreadToMarkdown(sorted),
-                filename: "dread-scores.md",
-              },
-              csv: {
-                content: dreadToCSV(sorted),
-                filename: "dread-scores.csv",
-              },
-              json: {
-                content: JSON.stringify(sorted, null, 2),
-                filename: "dread-scores.json",
-              },
-            }}
-          />
-        </div>
-
-        <div className="space-y-5">
-          {sorted.map((d, i) => (
-            <div key={i} className="space-y-2">
-              <div className="flex items-start sm:items-center justify-between gap-2.5 sm:gap-3">
-                <div className="flex items-start sm:items-center gap-2 sm:gap-3 min-w-0">
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 mt-0.5 sm:mt-0 ${riskColor(
-                      d.severity
-                    )}`}
-                  >
-                    {d.severity}
-                  </span>
-                  <span className="text-xs sm:text-sm font-medium sm:font-normal text-neutral-900 sm:truncate break-words min-w-0">
-                    {d.threat}
-                  </span>
-                </div>
-                <span className="text-xs sm:text-sm font-mono tabular-nums font-semibold text-neutral-900 flex-shrink-0">
-                  {d.total}
-                  <span className="text-neutral-400">/50</span>
-                </span>
-              </div>
-              <div className="h-2 rounded-full bg-neutral-100 overflow-hidden">
-                <div
-                  className="h-full bg-neutral-900 rounded-full transition-all"
-                  style={{ width: `${(d.total / max) * 100}%` }}
-                />
-              </div>
-              <div className="grid grid-cols-5 gap-1.5 sm:gap-2 mt-2">
-                {[
-                  { label: "Damage", v: d.damage },
-                  { label: "Repro", v: d.reproducibility },
-                  { label: "Exploit", v: d.exploitability },
-                  { label: "Users", v: d.affectedUsers },
-                  { label: "Discover", v: d.discoverability },
-                ].map((dim) => (
-                  <div
-                    key={dim.label}
-                    className="text-center px-1 py-1.5 sm:p-2 rounded-lg bg-neutral-50 min-w-0"
-                  >
-                    <div className="text-[10px] sm:text-xs text-neutral-400 truncate">
-                      {dim.label}
-                    </div>
-                    <div className="text-xs sm:text-sm font-semibold text-neutral-900 tabular-nums">
-                      {dim.v}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
-    </div>
-  );
-}
-
 /* ---------------- DFD Tab ---------------- */
+
+const TRUST_ZONE_META: Record<
+  DfdTrustLevel,
+  { badge: string; dot: string; label: string }
+> = {
+  External: {
+    badge: "bg-red-50 text-red-900 border-red-200",
+    dot: "bg-[#9C1D26]",
+    label: "External (Untrusted)",
+  },
+  DMZ: {
+    badge: "bg-orange-50 text-orange-900 border-orange-200",
+    dot: "bg-orange-600",
+    label: "DMZ Perimeter",
+  },
+  Internal: {
+    badge: "bg-slate-100 text-slate-800 border-slate-300",
+    dot: "bg-slate-700",
+    label: "Internal Zone",
+  },
+  Secure: {
+    badge: "bg-emerald-50 text-emerald-900 border-emerald-200",
+    dot: "bg-teal-700",
+    label: "Secure Data Zone",
+  },
+};
+
+const THREAT_TAG_STYLE: Record<string, string> = {
+  Critical: "bg-red-700 text-white border-red-800 hover:bg-red-800",
+  High: "bg-orange-700 text-white border-orange-800 hover:bg-orange-800",
+  Medium: "bg-slate-700 text-white border-slate-800 hover:bg-slate-800",
+  Low: "bg-slate-500 text-white border-slate-600 hover:bg-slate-600",
+};
 
 function DfdTab({
   result,
+  threats,
   loading,
   onGenerate,
+  onSelectThreat,
+  appName,
   bundle,
 }: {
   result: DfdResult | null;
+  threats?: Threat[];
   loading: boolean;
   onGenerate: () => void;
+  onSelectThreat: (threatId: string) => void;
+  appName: string;
   bundle: ExcelBundle;
 }) {
+  const threatMap = useMemo(() => {
+    const m = new Map<string, Threat>();
+    for (const t of threats ?? []) {
+      if (t.id) m.set(t.id.trim().toUpperCase(), t);
+    }
+    return m;
+  }, [threats]);
+
+  const reconciledComponents = useMemo(() => {
+    if (!result) return [];
+    return reconcileDfdComponentThreats(result.components, threats);
+  }, [result, threats]);
+
+  const nodeTags = useMemo(() => {
+    const out: Record<string, DiagramNodeTags> = {};
+    reconciledComponents.forEach((comp, idx) => {
+      const ids = comp.threatIds ?? [];
+      if (ids.length === 0) return;
+      out[getDfdNodeId(idx)] = {
+        componentName: comp.name,
+        tags: ids.map((id) => {
+          const t = threatMap.get(id);
+          return {
+            id,
+            title: t?.threat,
+            risk: t?.risk,
+          };
+        }),
+      };
+    });
+    return out;
+  }, [reconciledComponents, threatMap]);
+
   if (loading) return <LoadingBlock label="Generating data flow diagram" />;
   if (!result)
     return (
@@ -1965,6 +1722,30 @@ function DfdTab({
         onGenerate={onGenerate}
       />
     );
+
+  const safeSlug =
+    appName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "stride-gpt";
+
+  const zoneCounts = reconciledComponents.reduce(
+    (acc, c) => {
+      acc[c.trustLevel] = (acc[c.trustLevel] ?? 0) + 1;
+      return acc;
+    },
+    {} as Partial<Record<DfdTrustLevel, number>>
+  );
+
+  const linkedThreatCount = new Set(
+    reconciledComponents.flatMap((c) => c.threatIds ?? [])
+  ).size;
+
+  const exportResult: DfdResult = {
+    ...result,
+    components: reconciledComponents,
+  };
+
   return (
     <div className="space-y-6">
       <Card className="p-4 sm:p-6 lg:p-8 apple-card">
@@ -1974,32 +1755,88 @@ function DfdTab({
               Data Flow Diagram
             </h3>
             <p className="text-xs sm:text-sm text-neutral-500">
-              {result.components.length} components · {result.flows.length} data flows
+              {reconciledComponents.length} components &middot; {result.flows.length} data flows
+              {linkedThreatCount > 0
+                ? ` - ${linkedThreatCount} threat tags linked`
+                : !threats || threats.length === 0
+                  ? " - Generate Threat Model to display threat tags"
+                  : ""}
             </p>
           </div>
-          <ExportMenu
-            label="DFD"
-            formats={{
-              xlsx: { bundle, filename: "dfd-report.xlsx" },
-              markdown: {
-                content: dfdToMarkdown(result),
-                filename: "dfd.md",
-              },
-              mermaid: {
-                content: result.mermaid,
-                filename: "dfd.mmd",
-              },
-              json: {
-                content: JSON.stringify(result, null, 2),
-                filename: "dfd.json",
-              },
-            }}
-          />
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onGenerate}
+              className="rounded-full border-neutral-300 shrink-0"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Regenerate
+            </Button>
+            <ExportMenu
+              label="DFD"
+              formats={{
+                xlsx: { bundle, filename: "dfd-report.xlsx" },
+                markdown: {
+                  content: dfdToMarkdown(exportResult),
+                  filename: "dfd.md",
+                },
+                mermaid: {
+                  content: result.mermaid,
+                  filename: "dfd.mmd",
+                },
+                json: {
+                  content: JSON.stringify(exportResult, null, 2),
+                  filename: "dfd.json",
+                },
+              }}
+            />
+          </div>
+        </div>
+
+        {/* DFD shape & trust-zone legend */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-neutral-50 border border-neutral-200 mb-4 text-xs">
+          <div className="flex items-center gap-3 flex-wrap text-neutral-600">
+            <span className="font-medium text-neutral-800">Shapes:</span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3 h-2.5 rounded-[2px] bg-[#9C1D26] inline-block" />
+              External Entity
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3.5 h-2.5 rounded-full bg-slate-800 inline-block" />
+              Process
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3 h-2.5 rounded-b-sm rounded-t-[2px] bg-teal-700 inline-block" />
+              Data Store
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {(["External", "DMZ", "Internal", "Secure"] as const).map((zone) => {
+              const count = zoneCounts[zone] ?? 0;
+              if (count === 0) return null;
+              const meta = TRUST_ZONE_META[zone];
+              return (
+                <span
+                  key={zone}
+                  className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[11px] font-medium tabular-nums ${meta.badge}`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`} />
+                  {zone}: {count}
+                </span>
+              );
+            })}
+          </div>
         </div>
 
         {/* Rendered Mermaid DFD */}
-        <div className="rounded-xl bg-white border border-neutral-200 p-3 sm:p-4 mb-5 overflow-hidden">
-          <MermaidRenderer source={result.mermaid} />
+        <div className="rounded-xl bg-white border border-neutral-200 p-3 sm:p-4 mb-5 overflow-visible">
+          <MermaidRenderer
+            source={result.mermaid}
+            downloadFilename={`${safeSlug}-dfd.svg`}
+            nodeTags={nodeTags}
+            onTagClick={onSelectThreat}
+          />
         </div>
 
         {/* Copy Mermaid for draw.io / mermaid.live */}
@@ -2009,30 +1846,53 @@ function DfdTab({
           <div className="min-w-0">
             <h4 className="text-xs text-neutral-500 mb-3">COMPONENTS</h4>
             <div className="space-y-2">
-              {result.components.map((c, i) => (
-                <div
-                  key={i}
-                  className="flex items-center justify-between gap-3 p-3 rounded-lg bg-neutral-50 border border-neutral-200"
-                >
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-neutral-900 break-words">
-                      {c.name}
-                    </div>
-                    <div className="text-xs text-neutral-500 break-words">{c.type}</div>
-                  </div>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${
-                      c.trustLevel === "High"
-                        ? "bg-neutral-900 text-white"
-                        : c.trustLevel === "Medium"
-                        ? "bg-neutral-400 text-white"
-                        : "bg-neutral-200 text-neutral-700"
-                    }`}
+              {reconciledComponents.map((c, i) => {
+                const meta = TRUST_ZONE_META[c.trustLevel] ?? TRUST_ZONE_META.Internal;
+                const tagIds = c.threatIds ?? [];
+                return (
+                  <div
+                    key={i}
+                    className="flex items-start justify-between gap-3 p-3 rounded-lg bg-neutral-50 border border-neutral-200"
                   >
-                    {c.trustLevel}
-                  </span>
-                </div>
-              ))}
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-neutral-900 break-words">
+                        {c.name}
+                      </div>
+                      <div className="text-xs text-neutral-500 break-words">{c.type}</div>
+                      {tagIds.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                          {tagIds.map((id) => {
+                            const matched = threatMap.get(id);
+                            const styleClass =
+                              THREAT_TAG_STYLE[matched?.risk ?? "Medium"] ??
+                              THREAT_TAG_STYLE.Medium;
+                            return (
+                              <button
+                                key={id}
+                                type="button"
+                                onClick={() => onSelectThreat(id)}
+                                title={
+                                  matched
+                                    ? `${id} (${matched.risk}): ${matched.threat} -- Open in Threat Model`
+                                    : `Inspect ${id} in Threat Model`
+                                }
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border font-mono text-[10px] font-semibold transition-colors cursor-pointer ${styleClass}`}
+                              >
+                                {id}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                    <span
+                      className={`text-xs px-2.5 py-0.5 rounded-full border font-medium shrink-0 ${meta.badge}`}
+                    >
+                      {c.trustLevel}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
           <div className="min-w-0">
@@ -2047,7 +1907,11 @@ function DfdTab({
                     <span className="font-medium text-neutral-900 break-words">
                       {f.from}
                     </span>
-                    <ChevronRight className="w-3 h-3 text-neutral-400 shrink-0" />
+                    {f.bidirectional ? (
+                      <ArrowLeftRight className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
+                    ) : (
+                      <ChevronRight className="w-3 h-3 text-neutral-400 shrink-0" />
+                    )}
                     <span className="font-medium text-neutral-900 break-words">
                       {f.to}
                     </span>
@@ -2081,123 +1945,6 @@ function DfdTab({
           </p>
         </Card>
       )}
-    </div>
-  );
-}
-
-/* ---------------- Gherkin Tab ---------------- */
-
-function GherkinTab({
-  result,
-  loading,
-  onGenerate,
-  bundle,
-}: {
-  result: GherkinResult | null;
-  loading: boolean;
-  onGenerate: () => void;
-  bundle: ExcelBundle;
-}) {
-  const [copied, setCopied] = useState(false);
-  if (loading) return <LoadingBlock label="Generating BDD test cases" />;
-  if (!result)
-    return (
-      <PromptToGenerate
-        title="Gherkin Test Cases"
-        description="Generate BDD scenarios (Given/When/Then) that verify your system defends against each threat."
-        onGenerate={onGenerate}
-        requiresThreats
-      />
-    );
-
-  const fullText = `${result.feature}\n\n${result.scenarios
-    .map(
-      (s) =>
-        `${s.title}\n  ${s.given}\n  ${s.when}\n${s.then
-          .map((t) => `  ${t}`)
-          .join("\n")}`
-    )
-    .join("\n\n")}`;
-
-  const copyAll = async () => {
-    await navigator.clipboard.writeText(fullText);
-    setCopied(true);
-    toast.success("Copied Gherkin to clipboard");
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <div className="space-y-6">
-      <Card className="p-4 sm:p-6 lg:p-8 apple-card">
-        <div className="flex items-start justify-between gap-4 flex-wrap mb-6">
-          <div className="min-w-0">
-            <h3 className="text-title text-neutral-900 mb-1">
-              Gherkin Test Cases
-            </h3>
-            <p className="text-xs sm:text-sm text-neutral-500">
-              {result.scenarios.length} BDD scenarios ready for your test suite.
-            </p>
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={copyAll}
-              className="rounded-full border-neutral-300"
-            >
-              {copied ? (
-                <Check className="w-3 h-3" />
-              ) : (
-                <Copy className="w-3 h-3" />
-              )}
-              Copy all
-            </Button>
-            <ExportMenu
-              label="Gherkin Tests"
-              formats={{
-                xlsx: { bundle, filename: "gherkin-report.xlsx" },
-                text: {
-                  content: gherkinToText(result),
-                  filename: "gherkin-tests.feature",
-                },
-                json: {
-                  content: JSON.stringify(result, null, 2),
-                  filename: "gherkin-tests.json",
-                },
-              }}
-            />
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          {result.scenarios.map((s, i) => (
-            <div
-              key={i}
-              className="p-3.5 sm:p-4 rounded-xl bg-neutral-50 border border-neutral-200"
-            >
-              <div className="text-sm font-semibold text-neutral-900 mb-2 break-words">
-                {s.title}
-              </div>
-              <div className="space-y-1 text-xs sm:text-sm font-mono break-words">
-                <div className="text-neutral-700">
-                  <span className="text-neutral-400">Given</span> {s.given.replace(/^Given\s/, "")}
-                </div>
-                <div className="text-neutral-700">
-                  <span className="text-neutral-400">When</span> {s.when.replace(/^When\s/, "")}
-                </div>
-                {s.then.map((t, j) => (
-                  <div key={j} className="text-neutral-700">
-                    <span className="text-neutral-400">
-                      {j === 0 ? "Then" : "And"}
-                    </span>{" "}
-                    {t.replace(/^(Then|And)\s/, "")}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
     </div>
   );
 }
@@ -2468,8 +2215,8 @@ function ImageUploadZone({
       <div className="flex items-start sm:items-center justify-between gap-2 flex-wrap">
         <Label className="text-xs text-neutral-500 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 leading-relaxed">
           <ImagePlus className="w-3.5 h-3.5 shrink-0" />
-          <span>Architecture diagrams</span>
-          <span className="text-neutral-400 font-normal">(optional &middot; up to 5 &middot; PNG/JPEG/WebP &middot; max 4 MB each)</span>
+          <span>Reference diagrams</span>
+          <span className="text-neutral-400 font-normal">(optional supplementary context &middot; Architecture, DFD, or Sequence &middot; up to 5 &middot; max 4 MB each)</span>
         </Label>
         {images.length > 0 && (
           <button
@@ -2497,10 +2244,10 @@ function ImageUploadZone({
         >
           <ImagePlus className="w-6 h-6 text-neutral-400 shrink-0" />
           <p className="text-xs text-neutral-500 text-center leading-relaxed">
-            Drag &amp; drop diagrams here, or{" "}
+            Drag &amp; drop architecture, DFD, or sequence diagrams here, or{" "}
             <span className="font-medium text-neutral-700">click to browse</span>
             <br />
-            <span className="text-neutral-400">PNG &middot; JPEG &middot; WebP &middot; max 4 MB each &middot; up to 5 images</span>
+            <span className="text-neutral-400">Used as extra architectural context alongside your Application Description &middot; PNG &middot; JPEG &middot; WebP</span>
           </p>
           <input
             ref={inputRef}

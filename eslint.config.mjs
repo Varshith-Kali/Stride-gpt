@@ -8,7 +8,7 @@ const __dirname = dirname(__filename);
 
 const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
   rules: {
-    // ── Security-critical rules (ENABLED) ────────────────────────────
+    // -- Security-critical rules (ENABLED) ----------------------------
     // These catch real bugs that can become security issues.
     "no-debugger":      "error",   // debug statements must not reach production
     "no-unreachable":   "warn",    // dead code can mask logic errors
@@ -20,7 +20,7 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     // but warn on console.log so debug statements don't leak in production.
     "no-console": ["warn", { allow: ["error", "warn"] }],
 
-    // ── TypeScript rules (relaxed for developer ergonomics) ──────────
+    // -- TypeScript rules (relaxed for developer ergonomics) ----------
     // Keeping these off avoids false positives during iterative development.
     "@typescript-eslint/no-explicit-any":        "off",
     "@typescript-eslint/no-unused-vars":         "off",
@@ -29,7 +29,7 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "@typescript-eslint/prefer-as-const":        "off",
     "@typescript-eslint/no-unused-disable-directive": "off",
 
-    // ── React rules ───────────────────────────────────────────────────
+    // -- React rules ---------------------------------------------------
     "react-hooks/exhaustive-deps":  "off",
     "react-hooks/purity":           "off",
     "react/no-unescaped-entities":  "off",
@@ -37,11 +37,11 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "react/prop-types":             "off",
     "react-compiler/react-compiler":"off",
 
-    // ── Next.js rules ─────────────────────────────────────────────────
+    // -- Next.js rules -------------------------------------------------
     "@next/next/no-img-element":          "off",
     "@next/next/no-html-link-for-pages":  "off",
 
-    // ── General (non-security noise) ─────────────────────────────────
+    // -- General (non-security noise) ---------------------------------
     "no-unused-vars":           "off", // covered by TS compiler
     "no-empty":                 "off",
     "no-irregular-whitespace":  "off",

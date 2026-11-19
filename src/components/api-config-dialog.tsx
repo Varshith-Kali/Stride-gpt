@@ -45,7 +45,7 @@ export function ApiConfigDialog({
       return;
     }
     onSave(provider, apiKey.trim(), "gpt-5.5");
-    toast.success("Connected · GPT-5.5");
+    toast.success("Connected - GPT-5.5");
     onOpenChange(false);
   };
 
@@ -94,115 +94,128 @@ export function ApiConfigDialog({
           </DialogTitle>
           <DialogDescription className="text-xs sm:text-sm text-neutral-500 leading-relaxed">
             Enter your OpenAI API key to connect. Your key is held in session
-            memory only — it is never saved to disk, browser storage, or any
+            memory only -- it is never saved to disk, browser storage, or any
             server. It will be cleared when you close or refresh the tab.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 sm:space-y-5 py-1 sm:py-2">
-          {/* Security badge */}
-          <div className="flex items-start sm:items-center gap-2.5 p-3 rounded-xl bg-neutral-50 border border-neutral-200">
-            <ShieldCheck className="w-4 h-4 text-neutral-600 flex-shrink-0 mt-0.5 sm:mt-0" />
-            <p className="text-xs text-neutral-600 leading-relaxed">
-              <span className="font-semibold">Zero persistence.</span> Key lives in
-              session memory only. Cleared on refresh. Never logged or stored.
-            </p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSave();
+          }}
+        >
+          <div className="space-y-4 sm:space-y-5 py-1 sm:py-2">
+            {/* Security badge */}
+            <div className="flex items-start sm:items-center gap-2.5 p-3 rounded-xl bg-neutral-50 border border-neutral-200">
+              <ShieldCheck className="w-4 h-4 text-neutral-600 flex-shrink-0 mt-0.5 sm:mt-0" />
+              <p className="text-xs text-neutral-600 leading-relaxed">
+                <span className="font-semibold">Zero persistence.</span> Key lives in
+                session memory only. Cleared on refresh. Never logged or stored.
+              </p>
+            </div>
+
+            {/* API key */}
+            <div className="space-y-2">
+              <Label htmlFor="api-key" className="text-xs text-neutral-500">
+                API KEY
+              </Label>
+              <div className="relative">
+                <Input
+                  id="api-key"
+                  type={showKey ? "text" : "password"}
+                  value={apiKey}
+                  onChange={(e) => {
+                    setApiKey(e.target.value);
+                    if (testResult) setTestResult(null);
+                  }}
+                  placeholder={current ? "sk-... (active in session -- enter new key to replace)" : "sk-..."}
+                  className="h-11 rounded-xl pr-10 font-mono text-sm"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  data-1p-ignore       // disable 1Password autofill
+                  data-lpignore="true" // disable LastPass autofill
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey((s) => !s)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-neutral-400 hover:text-neutral-700"
+                  aria-label={showKey ? "Hide key" : "Show key"}
+                >
+                  {showKey ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Model -- fixed to GPT-5.5, displayed as read-only */}
+            <div className="space-y-2">
+              <Label className="text-xs text-neutral-500">MODEL</Label>
+              <div className="min-h-11 py-2 rounded-xl border border-neutral-200 bg-neutral-50 px-3.5 sm:px-4 flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-sm font-medium text-neutral-900 whitespace-nowrap">GPT-5.5</span>
+                <span className="text-xs text-neutral-400">Latest - Internal enterprise model</span>
+              </div>
+            </div>
           </div>
 
-          {/* API key */}
-          <div className="space-y-2">
-            <Label htmlFor="api-key" className="text-xs text-neutral-500">
-              API KEY
-            </Label>
-            <div className="relative">
-              <Input
-                id="api-key"
-                type={showKey ? "text" : "password"}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="sk-..."
-                className="h-11 rounded-xl pr-10 font-mono text-sm"
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                data-1p-ignore       // disable 1Password autofill
-                data-lpignore="true" // disable LastPass autofill
-              />
-              <button
+          {/* Test result */}
+          {testResult && (
+            <div
+              className={`flex items-start gap-2 p-3 mt-3 rounded-xl text-xs break-words ${
+                testResult.ok
+                  ? "bg-green-50 border border-green-200 text-green-900"
+                  : "bg-amber-50 border border-amber-200 text-amber-900"
+              }`}
+            >
+              {testResult.ok ? (
+                <Check className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              ) : (
+                <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              )}
+              <p className="leading-relaxed min-w-0 flex-1">{testResult.message}</p>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-2 mt-4">
+            {current && (
+              <Button
                 type="button"
-                onClick={() => setShowKey((s) => !s)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-neutral-400 hover:text-neutral-700"
-                aria-label={showKey ? "Hide key" : "Show key"}
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+                className="w-full sm:w-auto rounded-full border-neutral-300"
               >
-                {showKey ? (
-                  <EyeOff className="w-4 h-4" />
-                ) : (
-                  <Eye className="w-4 h-4" />
-                )}
-              </button>
-            </div>
-          </div>
-
-          {/* Model — fixed to GPT-5.5, displayed as read-only */}
-          <div className="space-y-2">
-            <Label className="text-xs text-neutral-500">MODEL</Label>
-            <div className="min-h-11 py-2 rounded-xl border border-neutral-200 bg-neutral-50 px-3.5 sm:px-4 flex items-center justify-between gap-2 flex-wrap">
-              <span className="text-sm font-medium text-neutral-900 whitespace-nowrap">GPT-5.5</span>
-              <span className="text-xs text-neutral-400">Latest · Internal enterprise model</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Test result */}
-        {testResult && (
-          <div
-            className={`flex items-start gap-2 p-3 rounded-xl text-xs break-words ${
-              testResult.ok
-                ? "bg-green-50 border border-green-200 text-green-900"
-                : "bg-amber-50 border border-amber-200 text-amber-900"
-            }`}
-          >
-            {testResult.ok ? (
-              <Check className="w-4 h-4 flex-shrink-0 mt-0.5" />
-            ) : (
-              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                Cancel
+              </Button>
             )}
-            <p className="leading-relaxed min-w-0 flex-1">{testResult.message}</p>
-          </div>
-        )}
-
-        <DialogFooter className="gap-2 sm:gap-2">
-          {current && (
             <Button
+              type="button"
               variant="outline"
-              onClick={() => onOpenChange(false)}
+              onClick={handleTest}
+              disabled={testing || !apiKey.trim()}
               className="w-full sm:w-auto rounded-full border-neutral-300"
             >
-              Cancel
+              {testing ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Zap className="w-4 h-4" />
+              )}
+              Test Connection
             </Button>
-          )}
-          <Button
-            variant="outline"
-            onClick={handleTest}
-            disabled={testing || !apiKey.trim()}
-            className="w-full sm:w-auto rounded-full border-neutral-300"
-          >
-            {testing ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Zap className="w-4 h-4" />
-            )}
-            Test Connection
-          </Button>
-          <Button
-            onClick={handleSave}
-            className="w-full sm:w-auto rounded-full bg-neutral-900 text-white hover:bg-neutral-800"
-          >
-            <Check className="w-4 h-4" />
-            Save & Connect
-          </Button>
-        </DialogFooter>
+            <Button
+              type="submit"
+              disabled={!apiKey.trim()}
+              className="w-full sm:w-auto rounded-full bg-neutral-900 text-white hover:bg-neutral-800"
+            >
+              <Check className="w-4 h-4" />
+              Save & Connect
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

@@ -1,5 +1,5 @@
 /**
- * useImageUpload — session-only image state management.
+ * useImageUpload -- session-only image state management.
  *
  * Images are held exclusively in React useState. They are never written to
  * localStorage, sessionStorage, IndexedDB, cookies, or any server. They are
@@ -12,16 +12,16 @@
  */
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 
 export interface UploadedImage {
   /** Stable client-side ID for keying React lists and removal. */
   id: string;
-  /** Original filename — display only. */
+  /** Original filename -- display only. */
   name: string;
   /** Human-readable size string, e.g. "1.2 MB". */
   sizeLabel: string;
-  /** MIME type — one of the ALLOWED_TYPES below. */
+  /** MIME type -- one of the ALLOWED_TYPES below. */
   mimeType: "image/png" | "image/jpeg" | "image/webp";
   /** Full data-URL (base64). Sent to the LLM as multimodal context. */
   dataUrl: string;
@@ -58,24 +58,28 @@ export interface UseImageUploadResult {
 
 export function useImageUpload(): UseImageUploadResult {
   const [images, setImages] = useState<UploadedImage[]>([]);
+  const imagesRef = useRef<UploadedImage[]>([]);
+  useEffect(() => {
+    imagesRef.current = images;
+  }, [images]);
+
+  // Revoke any remaining object URLs on unmount
+  useEffect(() => {
+    return () => {
+      imagesRef.current.forEach((i) => URL.revokeObjectURL(i.previewUrl));
+    };
+  }, []);
 
   const addFiles = useCallback(
     async (files: FileList | File[]): Promise<string[]> => {
       const fileArray = Array.from(files);
       const errors: string[] = [];
-
-      // Snapshot current count to enforce limit across the batch
-      let pending = 0;
-      setImages((prev) => {
-        pending = prev.length;
-        return prev;
-      });
-
+      const existingCount = imagesRef.current.length;
       const toAdd: UploadedImage[] = [];
 
       for (const file of fileArray) {
-        if (pending + toAdd.length >= MAX_IMAGES) {
-          errors.push(`Maximum ${MAX_IMAGES} images allowed — "${file.name}" skipped.`);
+        if (existingCount + toAdd.length >= MAX_IMAGES) {
+          errors.push(`Maximum ${MAX_IMAGES} images allowed -- "${file.name}" skipped.`);
           continue;
         }
         if (!ALLOWED_TYPES.has(file.type)) {
@@ -112,7 +116,13 @@ export function useImageUpload(): UseImageUploadResult {
       }
 
       if (toAdd.length > 0) {
-        setImages((prev) => [...prev, ...toAdd].slice(0, MAX_IMAGES));
+        setImages((prev) => {
+          const room = Math.max(0, MAX_IMAGES - prev.length);
+          const accepted = toAdd.slice(0, room);
+          const rejected = toAdd.slice(room);
+          rejected.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+          return [...prev, ...accepted];
+        });
       }
 
       return errors;

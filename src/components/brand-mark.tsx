@@ -1,6 +1,6 @@
 /**
  * Custom STRIDE GPT brand mark.
- * A monolithic "S" monogram built on a grid — three diagonal bands
+ * A monolithic "S" monogram built on a grid -- three diagonal bands
  * forming a shield silhouette. Drawn as crisp SVG geometry, not an
  * AI-generated illustration.
  */
@@ -28,7 +28,7 @@ export function BrandMark({
         strokeLinejoin="round"
         fill="none"
       />
-      {/* S monogram — three diagonal strokes */}
+      {/* S monogram -- three diagonal strokes */}
       <path
         d="M20 11.2 C20 9.4 18.3 8.3 16 8.3 C13.7 8.3 12 9.4 12 11.2 C12 12.9 13.6 13.6 16 14.1 C18.4 14.6 20 15.3 20 17 C20 18.8 18.3 19.9 16 19.9 C13.7 19.9 12 18.8 12 17"
         stroke={fill}

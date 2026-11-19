@@ -1,8 +1,8 @@
 /**
  * Export helpers for STRIDE threat model artifacts.
  * Produces clean Markdown tables, CSV, JSON, and Excel (.xlsx)
- * for any combination of threat model, mitigations, DREAD scores, DFD,
- * attack tree, and Gherkin test cases.
+ * for any combination of threat model, mitigations, DFD,
+ * and safety metrics.
  *
  * NOTE: The `xlsx` (SheetJS community) package was intentionally removed due to
  * unresolved high-severity vulnerabilities (GHSA-4r6h-8v6p-xvw6 Prototype
@@ -11,9 +11,7 @@
  */
 import type {
   ThreatModelResult,
-  Threat,
   MitigationResult,
-  DreadScore,
   DfdResult,
   SafetyMetric,
 } from "@/lib/stride-engine";
@@ -152,80 +150,19 @@ export function mitigationsToCSV(result: MitigationResult): string {
 }
 
 /* ------------------------------------------------------------------ */
-/* DREAD Scores                                                        */
-/* ------------------------------------------------------------------ */
-
-export function dreadToMarkdown(scores: DreadScore[]): string {
-  const head = [
-    "Threat",
-    "Damage",
-    "Reproducibility",
-    "Exploitability",
-    "Affected Users",
-    "Discoverability",
-    "Total",
-    "Severity",
-  ].join(" | ");
-  const sep = Array(8).fill("---").join(" | ");
-  const rows = scores
-    .map((d) =>
-      [
-        markdownEscape(d.threat),
-        d.damage,
-        d.reproducibility,
-        d.exploitability,
-        d.affectedUsers,
-        d.discoverability,
-        d.total,
-        d.severity,
-      ].join(" | ")
-    )
-    .join("\n");
-  return `# DREAD Risk Scores\n\n| ${head} |\n| ${sep} |\n${rows
-    .split("\n")
-    .map((r) => `| ${r} |`)
-    .join("\n")}\n`;
-}
-
-export function dreadToCSV(scores: DreadScore[]): string {
-  const header = [
-    "Threat",
-    "Damage",
-    "Reproducibility",
-    "Exploitability",
-    "Affected Users",
-    "Discoverability",
-    "Total",
-    "Severity",
-  ].join(",");
-  const rows = scores.map((d) =>
-    [
-      csvEscape(d.threat),
-      d.damage,
-      d.reproducibility,
-      d.exploitability,
-      d.affectedUsers,
-      d.discoverability,
-      d.total,
-      d.severity,
-    ].join(",")
-  );
-  return [header, ...rows].join("\n");
-}
-
-/* ------------------------------------------------------------------ */
 /* DFD                                                                 */
 /* ------------------------------------------------------------------ */
 
 export function dfdToMarkdown(result: DfdResult): string {
-  const compHead = ["Component", "Type", "Trust Level"].join(" | ");
-  const compSep = ["---", "---", "---"].join(" | ");
+  const compHead = ["Component", "Type", "Trust Level", "Threats"].join(" | ");
+  const compSep = ["---", "---", "---", "---"].join(" | ");
   const compRows = result.components
     .map((c) =>
       [
         markdownEscape(c.name),
         markdownEscape(c.type),
         markdownEscape(c.trustLevel),
+        markdownEscape((c.threatIds ?? []).join(", ") || "--"),
       ].join(" | ")
     )
     .join("\n");
@@ -251,65 +188,8 @@ export function dfdToMarkdown(result: DfdResult): string {
     .join("\n")}\n`;
 }
 
-/* ------------------------------------------------------------------ */
-/* Attack Tree                                                         */
-/* ------------------------------------------------------------------ */
-/* Attack Tree (kept for Markdown export completeness)                 */
-/* ------------------------------------------------------------------ */
-
-/** Minimal local type — mirrors stride-engine's AttackTreeResult. */
-interface AttackTreeResult {
-  mermaid: string;
-  root: { goal: string; subgoals: AttackTreeNode[] };
-  narrative: string;
-}
-
-/** Minimal local type — mirrors stride-engine's GherkinResult. */
-interface GherkinResult {
-  feature: string;
-  scenarios: { title: string; given: string; when: string; then: string[] }[];
-}
-
-/** Recursive attack-tree node — mirrors the shape returned by stride-engine. */
-interface AttackTreeNode {
-  goal: string;
-  subgoals: AttackTreeNode[];
-}
-
-function attackTreeToLines(
-  node: AttackTreeNode,
-  depth: number
-): string[] {
-  const lines = [`${"  ".repeat(depth)}- ${node.goal}`];
-  for (const sg of node.subgoals ?? []) {
-    lines.push(...attackTreeToLines(sg, depth + 1));
-  }
-  return lines;
-}
-
-export function attackTreeToMarkdown(result: AttackTreeResult): string {
-  return `# Attack Tree\n\n## Mermaid Source\n\n\`\`\`mermaid\n${result.mermaid}\n\`\`\`\n\n## Tree Structure\n\n${attackTreeToLines(
-    result.root,
-    0
-  ).join("\n")}\n\n## Narrative\n\n${result.narrative}\n`;
-}
-
-/* ------------------------------------------------------------------ */
-/* Gherkin                                                             */
-/* ------------------------------------------------------------------ */
-
-export function gherkinToText(result: GherkinResult): string {
-  const scenarios = result.scenarios
-    .map((s) => {
-      const thens = s.then.map((t) => `  ${t}`).join("\n");
-      return `${s.title}\n  ${s.given}\n  ${s.when}\n${thens}`;
-    })
-    .join("\n\n");
-  return `${result.feature}\n\n${scenarios}\n`;
-}
-
 /* ================================================================== */
-/* Minimal OOXML .xlsx writer — no external dependencies               */
+/* Minimal OOXML .xlsx writer -- no external dependencies               */
 /*                                                                      */
 /* The root cause of the "corrupt workbook" error was <Sheet> (capital */
 /* S). XML is case-sensitive; the OOXML spec requires lowercase        */
@@ -326,7 +206,7 @@ function xmlEsc(v: unknown): string {
     .replace(/"/g, "&quot;");
 }
 
-/** 0-based column index → Excel column letter (A … Z, AA …). */
+/** 0-based column index -> Excel column letter (A ... Z, AA ...). */
 function colLetter(n: number): string {
   let s = "";
   for (let c = n + 1; c > 0; ) {
@@ -417,7 +297,7 @@ function calcCrc32(data: Uint8Array): number {
 }
 
 /* ------------------------------------------------------------------ */
-/* ZIP builder — stored (no compression), DataView for byte order     */
+/* ZIP builder -- stored (no compression), DataView for byte order     */
 /* ------------------------------------------------------------------ */
 
 interface ZipEntry {
@@ -457,7 +337,7 @@ function buildZip(entries: ZipEntry[]): Uint8Array {
   let p = 0;
   const lfOffsets: number[] = [];
 
-  // ── Local file headers + file data ──────────────────────────────
+  // -- Local file headers + file data ------------------------------
   for (const m of meta) {
     lfOffsets.push(p);
     dv.setUint32(p, 0x04034b50, true); p += 4; // PK\3\4 signature
@@ -475,7 +355,7 @@ function buildZip(entries: ZipEntry[]): Uint8Array {
     u8.set(m.data, p); p += m.sz;
   }
 
-  // ── Central directory ─────────────────────────────────────────────
+  // -- Central directory ---------------------------------------------
   const cdStart = p;
   for (let i = 0; i < meta.length; i++) {
     const m = meta[i];
@@ -499,7 +379,7 @@ function buildZip(entries: ZipEntry[]): Uint8Array {
     u8.set(m.nb, p); p += m.nb.length;
   }
 
-  // ── End-of-central-directory record ──────────────────────────────
+  // -- End-of-central-directory record ------------------------------
   const cdSize = p - cdStart;
   dv.setUint32(p, 0x06054b50,    true); p += 4; // PK\5\6 signature
   dv.setUint16(p, 0,             true); p += 2; // disk number
@@ -526,31 +406,12 @@ export interface ExcelBundle {
 }
 
 /**
- * Build a multi-sheet .xlsx workbook.
- *
- * SHEET LAYOUT
- * ─────────────────────────────────────────────────────────────────────
- * "STRIDE Threats"      — ONE ROW per threat (so 2 Spoofing = 2 rows).
- *                         COLUMNS: Finding/Issue, Description, Risk,
- *                         MITRE ATT&CK Mapping, Recommendation, Priority,
- *                         OWASP Reference, + DREAD scores if available.
- *                         Mitigations and DREAD are joined by threat name.
- *
- * "Hardening Checklist" — if present
- * "Gherkin Tests"       — if present
- * "DFD Components"      — if present
- * "DFD Flows"           — if present
- *
- * The Summary/Executive Summary sheet is intentionally removed;
- * that context belongs on the web page, not the spreadsheet.
- */
-/**
- * Build a single-sheet .xlsx workbook — "STRIDE" sheet only.
+ * Build a single-sheet .xlsx workbook -- "STRIDE" sheet only.
  *
  * COLUMNS
- * ───────────────────────────────────────────────────────────────────
+ * -------------------------------------------------------------------
  * S.No | STRIDE Category | Threat Description | MITRE ATT&CK Mapping
- * | Risk Level | Existing Controls
+ * | Risk Level | Existing Controls | Safety Metrics
  *
  * "Existing Controls" is populated from the per-threat current-controls
  * text the user typed into the UI. If no note was given for a threat
@@ -583,12 +444,12 @@ export function buildExcelWorkbook(bundle: ExcelBundle): ArrayBuffer {
     sheets.push({ name: "STRIDE", rows });
   }
 
-  // ── Build SST and worksheet XMLs ─────────────────────────────────
+  // -- Build SST and worksheet XMLs ---------------------------------
   const sst: string[] = [];
   const sstMap = new Map<string, number>();
   const sheetXmls = sheets.map((s) => buildSheetXml(s.rows, sst, sstMap));
 
-  // ── OOXML XML parts ──────────────────────────────────────────────
+  // -- OOXML XML parts ----------------------------------------------
   const sheetCTs = sheets
     .map(
       (_, i) =>

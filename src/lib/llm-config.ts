@@ -1,5 +1,5 @@
 /**
- * LLM provider configuration — OpenAI only.
+ * LLM provider configuration -- OpenAI only.
  *
  * This application calls the OpenAI Responses API directly from server-side
  * API routes using the user-provided API key. The key is held in session
@@ -29,7 +29,7 @@ export const PROVIDER_MODELS: Record<Provider, ProviderModel[]> = {
     {
       id: "gpt-5.5",
       label: "GPT-5.5",
-      note: "Latest · Internal enterprise model",
+      note: "Latest - Internal enterprise model",
     },
   ],
 };

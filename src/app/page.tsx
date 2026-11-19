@@ -54,7 +54,7 @@ export default function Page() {
 
 function providerLabel(_provider: string, model: string): string {
   const found = PROVIDER_MODELS.openai.find((m) => m.id === model);
-  return found ? `OpenAI · ${found.label}` : "OpenAI";
+  return found ? `OpenAI - ${found.label}` : "OpenAI";
 }
 
 /* ----------------- NavBar ----------------- */
@@ -71,7 +71,7 @@ function NavBar({
   onNewAnalysis: () => void;
 }) {
   const [scrolled, setScrolled] = useState(false);
-  // "done" flash — shows a brief checkmark after reset completes
+  // "done" flash -- shows a brief checkmark after reset completes
   const [justReset, setJustReset] = useState(false);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -143,7 +143,7 @@ function NavBar({
             )}
           </button>
 
-          {/* New Analysis button — resets all form + results, preserves API key */}
+          {/* New Analysis button -- resets all form + results, preserves API key */}
           <Button
             size="sm"
             onClick={handleNewAnalysis}
@@ -220,11 +220,11 @@ function Footer() {
               <BrandMark className="w-4 h-4 text-white" mono />
             </div>
             <span className="font-medium text-neutral-700 whitespace-nowrap">STRIDE GPT</span>
-            <span className="text-neutral-400" aria-hidden="true">·</span>
+            <span className="text-neutral-400" aria-hidden="true">&middot;</span>
             <span>AI-powered threat modeling</span>
           </div>
           <span className="text-neutral-400 whitespace-nowrap">
-            © {new Date().getFullYear()} STRIDE GPT
+            &copy; {new Date().getFullYear()} STRIDE GPT
           </span>
         </div>
       </div>

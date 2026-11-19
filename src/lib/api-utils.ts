@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { validateConfig, LlmConfig } from "@/lib/llm-config";
 import { LlmError } from "@/lib/stride-engine";
 
-/** Max request body size — raised to 20 MB to allow base64-encoded image payloads.
+/** Max request body size -- raised to 20 MB to allow base64-encoded image payloads.
  *  Image validation (count, size, MIME) happens inside the route handler. */
 const MAX_BODY_BYTES = 20_971_520; // 20 MB
 
-// ─── In-memory sliding-window rate limiter ────────────────────────────────────
+// --- In-memory sliding-window rate limiter ------------------------------------
 // 20 API calls per minute per IP. Simple and dependency-free for a single-
-// instance Next.js app. Does not persist across restarts (acceptable — the
+// instance Next.js app. Does not persist across restarts (acceptable -- the
 // goal is abuse prevention, not forensics).
 const RATE_LIMIT_WINDOW_MS   = 60_000; // 1 minute
 const RATE_LIMIT_MAX_REQUESTS = 20;    // per window per IP
@@ -16,7 +16,7 @@ const RATE_LIMIT_MAX_REQUESTS = 20;    // per window per IP
 interface RateWindow { timestamps: number[] }
 const rateStore = new Map<string, RateWindow>();
 
-// Periodic cleanup — remove windows that haven't been touched in > 10 min.
+// Periodic cleanup -- remove windows that haven't been touched in > 10 min.
 // Prevents unbounded memory growth in long-running deployments.
 setInterval(() => {
   const now = Date.now();
@@ -32,7 +32,7 @@ setInterval(() => {
  * Returns a 429 NextResponse if the limit is exceeded, or null if OK.
  */
 export function checkRateLimit(req: NextRequest): NextResponse | null {
-  // Best-effort IP extraction — works for direct clients and behind most
+  // Best-effort IP extraction -- works for direct clients and behind most
   // standard reverse proxies. Falls back to "unknown" (still counted).
   const ip =
     req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
@@ -67,10 +67,10 @@ export function checkRateLimit(req: NextRequest): NextResponse | null {
 
   window.timestamps.push(now);
   rateStore.set(ip, window);
-  return null; // OK — not rate limited
+  return null; // OK -- not rate limited
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /**
  * Safely parse a JSON request body with size and content-type guards.
@@ -88,7 +88,7 @@ export async function readJsonRequest<T = unknown>(
   | { ok: true; data: T; config: LlmConfig | null }
   | { ok: false; error: NextResponse }
 > {
-  // Content-Type check — reject non-JSON to prevent content sniffing.
+  // Content-Type check -- reject non-JSON to prevent content sniffing.
   const ct = req.headers.get("content-type") ?? "";
   if (!ct.toLowerCase().includes("application/json")) {
     return {
@@ -150,7 +150,7 @@ export async function readJsonRequest<T = unknown>(
 
 /**
  * Standard error response for a missing or invalid LLM config.
- * 401 — the request lacks valid credentials/configuration.
+ * 401 -- the request lacks valid credentials/configuration.
  */
 export function configRequiredError(): NextResponse {
   return NextResponse.json(

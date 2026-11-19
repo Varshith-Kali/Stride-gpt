@@ -22,9 +22,9 @@ export const maxDuration = 120;
  *
  * Event format:   data: <JSON>\n\n
  *
- *   { type: "progress", chars: number }  — tokens received so far
- *   { type: "done",     data: {...} }    — final parsed threat model
- *   { type: "error",    message: string }— failure with user-readable message
+ *   { type: "progress", chars: number }  -- tokens received so far
+ *   { type: "done",     data: {...} }    -- final parsed threat model
+ *   { type: "error",    message: string }-- failure with user-readable message
  *
  * WHY SSE instead of plain JSON:
  *   Reasoning models (GPT-5.5, o-series) can take 60-120 s to produce the
@@ -34,7 +34,7 @@ export const maxDuration = 120;
  *   shows a live progress indicator instead of a frozen spinner.
  */
 export async function POST(req: NextRequest) {
-  // Rate-limit before doing ANY body parsing — cheap early exit
+  // Rate-limit before doing ANY body parsing -- cheap early exit
   const rateLimitError = checkRateLimit(req);
   if (rateLimitError) return rateLimitError;
 
@@ -44,12 +44,13 @@ export async function POST(req: NextRequest) {
     images?: unknown;
   }>(req).catch(() => null);
 
-  if (!parsed || !parsed.ok) {
+  if (!parsed) {
     return Response.json(
       { error: "Invalid request body." },
       { status: 400 }
     );
   }
+  if (!parsed.ok) return parsed.error;
 
   const { config, data } = parsed;
   if (!config) return configRequiredError();
@@ -59,13 +60,13 @@ export async function POST(req: NextRequest) {
     return Response.json(
       {
         error:
-          "Invalid application input. Description must be 10–8000 chars; appType and authentication must be from the allowed sets.",
+          "Invalid application input. Description must be 10-8000 chars; appType and authentication must be from the allowed sets.",
       },
       { status: 400 }
     );
   }
 
-  // Images are optional — silently drop invalid ones
+  // Images are optional -- silently drop invalid ones
   const images: LlmImage[] = validateImages(data.images);
 
   // Build the SSE streaming response
@@ -79,7 +80,7 @@ export async function POST(req: NextRequest) {
             encoder.encode(`data: ${JSON.stringify(evt)}\n\n`)
           );
         } catch {
-          // Controller already closed — ignore
+          // Controller already closed -- ignore
         }
       };
 

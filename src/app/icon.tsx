@@ -5,7 +5,7 @@ export const size = { width: 32, height: 32 };
 export const contentType = "image/png";
 
 /**
- * App favicon — renders the STRIDE GPT shield monogram.
+ * App favicon -- renders the STRIDE GPT shield monogram.
  * Replaces the default Next.js "N" icon.
  * Served at /favicon.ico automatically by Next.js App Router.
  */

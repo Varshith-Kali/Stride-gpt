@@ -57,8 +57,14 @@ export async function POST(req: NextRequest) {
     }
 
     const threats = sanitizeThreats(data.threats);
+    if (threats.length === 0) {
+      return Response.json(
+        { error: "No valid threats found." },
+        { status: 400 }
+      );
+    }
     const currentControls = validateCurrentControls(data.currentControls);
-    // Optional multimodal images — session-only, never stored
+    // Optional multimodal images -- session-only, never stored
     const images = validateImages(data.images);
 
     const result = await generateSafetyMetrics(
