@@ -1187,7 +1187,7 @@ export async function generateDfd(
     `\n  - Use ONLY these exact values for "type": "External Entity" | "Process" | "Data Store".` +
     `\n  - Use ONLY these exact values for "trustLevel": "External" | "DMZ" | "Internal" | "Secure".` +
     (threatEntries.length > 0
-      ? `\n  - For "threatIds", attach ONLY real matching IDs from the identified threats list above (or [] if none apply), ensuring every identified threat maps to its affected component(s).`
+      ? `\n  - For "threatIds", attach ONLY real matching IDs from the identified threats list above whose "Component:" directly matches THIS specific component (or [] if none apply). Do NOT attach a threat ID to neighboring or unrelated components.`
       : `\n  - Set "threatIds": [] when no threats list was provided.`) +
     `\n\nReturn ONLY a JSON object (no prose, no markdown fences):\n` +
     `{\n` +

@@ -31,6 +31,7 @@ const GENERIC_TOKENS = new Set([
   "platform",
   "engine",
   "manager",
+  "management",
   "handler",
   "tier",
   "zone",
@@ -41,6 +42,12 @@ const GENERIC_TOKENS = new Set([
   "core",
   "backend",
   "frontend",
+  "web",
+  "internet",
+  "facing",
+  "cloud",
+  "data",
+  "flow",
   "the",
   "and",
   "for",
@@ -48,6 +55,10 @@ const GENERIC_TOKENS = new Set([
   "via",
   "from",
   "into",
+  "of",
+  "to",
+  "in",
+  "on",
 ]);
 
 /** Canonical Mermaid node ID for the i-th component in a DFD. */
@@ -63,10 +74,38 @@ function normalizeLabel(s: string): string {
     .trim();
 }
 
-function tokenize(s: string): string[] {
+function tokenize(s: string, stopTokens?: ReadonlySet<string>): string[] {
   return normalizeLabel(s)
     .split(" ")
-    .filter((w) => w.length >= 2 && !GENERIC_TOKENS.has(w));
+    .filter(
+      (w) =>
+        w.length >= 2 &&
+        !GENERIC_TOKENS.has(w) &&
+        !(stopTokens && stopTokens.has(w))
+    );
+}
+
+/**
+ * Detect brand/app-name tokens repeated across 3+ DFD components
+ * (e.g. "mediportal" appearing in 3+ components). Treating these as
+ * non-distinctive prevents unrelated components from sharing false matches.
+ */
+function findSharedPrefixTokens(components: DfdComponent[]): Set<string> {
+  if (components.length < 3) return new Set();
+  const docFreq = new Map<string, number>();
+  for (const c of components) {
+    const uniqueTokens = new Set(tokenize(c.name));
+    for (const tok of uniqueTokens) {
+      docFreq.set(tok, (docFreq.get(tok) ?? 0) + 1);
+    }
+  }
+  const shared = new Set<string>();
+  for (const [tok, count] of docFreq) {
+    if (count >= 3) {
+      shared.add(tok);
+    }
+  }
+  return shared;
 }
 
 /** Validate and deduplicate raw threat IDs against an optional set of known IDs. */
@@ -140,84 +179,148 @@ export function sortThreatIds(
 const ROLE_SYNONYM_GROUPS: RegExp[] = [
   /\b(waf|cdn|cloudflare|edge|firewall|ddos)\b/i,
   /\b(gateway|ingress|proxy|load\s*balancer|router)\b/i,
+  /\b(web\s*app|webapp|web\s*application|web\s*portal|frontend|spa|website|internet\s*facing\s*web)\b/i,
   /\b(auth|authentication|oauth|oidc|saml|sso|jwt|token|identity|idp|cognito|okta|auth0)\b/i,
+  /\b(rbac|authorization|authorisation|access\s*control|policy|acl|permission)\b/i,
+  /\b(session|cookie|csrf)\b/i,
   /\b(llm|orchestrator|rag|agent|planner|prompt|inference|chatbot|completion)\b/i,
   /\b(embed|embedding|embeddings)\b/i,
   /\b(vector|pinecone|pgvector|qdrant|weaviate|milvus)\b/i,
-  /\b(database|db|sql|postgres|postgresql|mysql|mongo|mongodb|dynamodb|storage|s3|blob|bucket|knowledge)\b/i,
-  /\b(cache|redis|memcached|session)\b/i,
+  /\b(database|db|sql|postgres|postgresql|mysql|mongo|mongodb|dynamodb|storage|s3|blob|bucket|ehr|records)\b/i,
+  /\b(cache|redis|memcached)\b/i,
   /\b(secret|vault|kms|credential|key\s*management)\b/i,
   /\b(audit|log|logging|telemetry|siem|monitor)\b/i,
-  /\b(user|browser|client|mobile|frontend|web\s*ui|portal|customer)\b/i,
 ];
 
-function scoreComponentMatch(
+const EXTERNAL_ACTOR_RE =
+  /\b(user|browser|client|mobile|customer|patient|clinician|provider|partner|admin)\b/i;
+
+const COMPOSITE_SPLIT_RE = /[/,;&+]|->|\band\b/i;
+
+function splitCompositeSegments(raw: string): string[] {
+  return raw
+    .split(COMPOSITE_SPLIT_RE)
+    .map((s) => normalizeLabel(s))
+    .filter(Boolean);
+}
+
+/**
+ * Score how accurately a single DFD component matches a single target
+ * component phrase (either the full `threat.component` or one segment of a
+ * composite `threat.component`).
+ *
+ * Scoring tiers (strictly ordered so exact/component-field matches always
+ * beat fuzzy fallbacks and unrelated components score 0):
+ *   100     Exact normalized match against target component phrase
+ *   92      Exact distinctive-core match (ignoring shared brand prefix)
+ *   78-88   Strong multi-word containment (weighted by coverage >= 45%)
+ *   42-76   Distinctive token overlap (Jaccard/recall) against target phrase
+ *   32-38   Exact component name mention inside threat title/description
+ *   20-26   Semantic role-group / Data Store / External Entity fallback
+ *   0       No reliable match
+ */
+function scoreComponentAgainstTarget(
   componentName: string,
   componentType: DfdComponent["type"],
-  threatComponentRaw: string,
+  targetPhraseRaw: string,
   threatTitle: string,
-  threatDescription = ""
+  threatDescription: string,
+  sharedTokens: ReadonlySet<string>
 ): number {
   const normComp = normalizeLabel(componentName);
-  const normThreatComp = normalizeLabel(threatComponentRaw);
+  const normTarget = normalizeLabel(targetPhraseRaw);
   if (!normComp) return 0;
 
-  if (normThreatComp) {
-    // Split composite threat component strings (e.g. "API Gateway / Auth Service")
-    const segments = threatComponentRaw
-      .split(/[/,;&+]|->|\band\b/i)
-      .map((s) => normalizeLabel(s))
-      .filter(Boolean);
+  // Strip shared brand/prefix tokens for clean distinctive matching
+  const compDistinct = new Set(tokenize(componentName, sharedTokens));
+  const compAllTokens = new Set(tokenize(componentName));
 
-    for (const seg of [normThreatComp, ...segments]) {
-      if (seg === normComp) return 100;
-      if (seg.length >= 4 && normComp.length >= 4) {
-        if (seg.includes(normComp) || normComp.includes(seg)) return 75;
+  if (normTarget) {
+    // Tier 1: Exact normalized match
+    if (normTarget === normComp) return 100;
+
+    // Tier 2: Distinctive-core exact match or high-coverage containment
+    const compCore = Array.from(compDistinct).join(" ");
+    const targetDistinct = tokenize(normTarget, sharedTokens);
+    const targetCore = targetDistinct.join(" ");
+
+    if (compCore && targetCore && targetCore === compCore) {
+      return 92;
+    }
+
+    if (normTarget.length >= 5 && normComp.length >= 5) {
+      if (normTarget.includes(normComp) || normComp.includes(normTarget)) {
+        const shorter = Math.min(normTarget.length, normComp.length);
+        const longer = Math.max(normTarget.length, normComp.length);
+        const ratio = shorter / longer;
+        if (ratio >= 0.45) {
+          return Math.round(78 + ratio * 10);
+        }
+      }
+    }
+
+    // Tier 3: Distinctive token overlap strictly against target component phrase
+    const targetDistinctSet = new Set(targetDistinct);
+    if (compDistinct.size > 0 && targetDistinctSet.size > 0) {
+      let overlap = 0;
+      for (const tok of compDistinct) {
+        if (targetDistinctSet.has(tok)) overlap++;
+      }
+      if (overlap > 0) {
+        const unionSize = compDistinct.size + targetDistinctSet.size - overlap;
+        const jaccard = overlap / Math.max(1, unionSize);
+        const recall = overlap / compDistinct.size;
+        if (overlap >= 2 || jaccard >= 0.34 || recall >= 0.5) {
+          return Math.round(42 + jaccard * 28 + Math.min(2, overlap - 1) * 4);
+        }
       }
     }
   }
 
-  const compTokens = new Set(tokenize(componentName));
-  const threatTokens = new Set([
-    ...tokenize(threatComponentRaw),
-    ...tokenize(threatTitle).filter((w) => compTokens.has(w)),
-  ]);
-
-  let overlap = 0;
-  for (const tok of compTokens) {
-    if (threatTokens.has(tok)) overlap++;
-  }
-
-  // Direct token overlap always outranks heuristic role fallbacks
-  if (overlap > 0) {
-    return 30 + overlap * 15;
-  }
-
-  // Exact component name mention inside the threat description when threat.component is broad
-  if (normComp.length >= 5 && threatDescription) {
+  // Tier 4: Exact component name mentioned verbatim in the threat title/description
+  if (compDistinct.size >= 2) {
+    const normTitle = normalizeLabel(threatTitle);
     const normDesc = normalizeLabel(threatDescription);
-    if (normDesc.includes(normComp)) {
-      return 26;
+    if (normComp.length >= 6 && normTitle.includes(normComp)) {
+      return 38;
+    }
+    if (normComp.length >= 6 && normDesc.includes(normComp)) {
+      return 32;
+    }
+  } else if (compAllTokens.size >= 1) {
+    const normTitle = normalizeLabel(threatTitle);
+    if (normComp.length >= 6 && normTitle.includes(normComp)) {
+      return 34;
     }
   }
 
-  // Semantic role-group fallback when exact wording differs (e.g., "RAG Pipeline" vs "AI Orchestrator")
-  const threatContext = `${normThreatComp} ${normalizeLabel(threatTitle)}`;
-  let roleHits = 0;
-  for (const groupRe of ROLE_SYNONYM_GROUPS) {
-    if (groupRe.test(normComp) && groupRe.test(threatContext)) {
-      roleHits++;
+  // Tier 5: Semantic role-group fallback strictly comparing componentName vs targetPhrase
+  if (normTarget) {
+    let roleHits = 0;
+    for (const groupRe of ROLE_SYNONYM_GROUPS) {
+      if (groupRe.test(normComp) && groupRe.test(normTarget)) {
+        roleHits++;
+      }
     }
-  }
-  if (roleHits > 0) {
-    return 18 + Math.min(2, roleHits) * 2;
-  }
+    if (roleHits > 0) {
+      return 22 + Math.min(2, roleHits) * 2;
+    }
 
-  // Fallback for database/cache/storage aliases when wording differs slightly
-  if (componentType === "Data Store" && normThreatComp) {
-    const storeHint = /\b(db|database|sql|postgres|mysql|mongo|store|storage|redis|cache|bucket|s3|vault|secret|vector)\b/i;
-    if (storeHint.test(normThreatComp) && storeHint.test(normComp)) {
-      return 18;
+    // Data Store alias fallback strictly against targetPhrase
+    if (componentType === "Data Store") {
+      const storeHint = /\b(db|database|sql|postgres|mysql|mongo|store|storage|redis|cache|bucket|s3|vault|secret|vector)\b/i;
+      if (storeHint.test(normTarget) && storeHint.test(normComp)) {
+        return 20;
+      }
+    }
+
+    // External Entity actor fallback strictly for External Entity nodes
+    if (
+      componentType === "External Entity" &&
+      EXTERNAL_ACTOR_RE.test(normComp) &&
+      EXTERNAL_ACTOR_RE.test(normTarget)
+    ) {
+      return 20;
     }
   }
 
@@ -226,14 +329,18 @@ function scoreComponentMatch(
 
 /**
  * Reconciles LLM-provided `threatIds` and deterministically links threats from
- * the STRIDE Threat Model onto matching DFD components.
+ * the STRIDE Threat Model onto the exact matching DFD component(s).
  *
- * Ensures:
- * - Only real threat IDs from `threats` are kept (no hallucinated IDs).
- * - Exact-name affected components always receive their matching threat ID.
- * - Unlinked threats are matched cleanly to the best matching component(s)
- *   so diagrams reliably display real threat tags like `T008`, `T011`, etc.
- * - Tags are sorted by highest severity first.
+ * Accuracy guarantees:
+ * - Rejects hallucinated or invalid threat IDs not present in `threats`.
+ * - Audits LLM-assigned `threatIds` and drops misplaced tags when a threat
+ *   clearly belongs to a different component (no wrong-component leakage).
+ * - Ignores shared app-name prefixes (e.g. "MediPortal ...") during matching
+ *   so distinct components never collide on the application name.
+ * - Evaluates each segment of a composite `threat.component` (e.g. "A / B")
+ *   independently so each segment binds to its exact component without
+ *   bleeding onto a third unrelated node.
+ * - Sorts threat IDs by highest severity first.
  */
 export function reconcileDfdComponentThreats(
   components: DfdComponent[],
@@ -255,49 +362,101 @@ export function reconcileDfdComponentThreats(
     threatById.set(id, { ...t, id });
   }
 
-  // Start with validated server-returned threatIds
-  const sets = components.map((c) => new Set(sanitizeThreatIds(c.threatIds, validIds)));
+  const sharedTokens = findSharedPrefixTokens(components);
 
-  // Track which threats are already linked to at least one component
-  const alreadyLinked = new Set<string>();
-  for (const s of sets) {
-    for (const id of s) alreadyLinked.add(id);
-  }
+  // Collect sanitized LLM-proposed component assignments per threat
+  const llmAssignedIndices = new Map<string, number[]>();
+  components.forEach((c, idx) => {
+    for (const id of sanitizeThreatIds(c.threatIds, validIds)) {
+      const list = llmAssignedIndices.get(id) ?? [];
+      list.push(idx);
+      llmAssignedIndices.set(id, list);
+    }
+  });
 
-  // Ensure exact-match affected components always carry their threat ID,
-  // and deterministically match any unlinked threat to its strongest DFD component(s)
+  const sets = components.map(() => new Set<string>());
+
   for (const [id, threat] of threatById) {
-    const scored = components
-      .map((c, idx) => ({
-        idx,
-        score: scoreComponentMatch(
+    const compField = threat.component || "";
+    const segments = splitCompositeSegments(compField);
+    const targetPhrases = segments.length > 0 ? segments : [compField];
+    const isComposite = targetPhrases.length > 1;
+
+    // Score every component against each target segment independently
+    const segmentScores = targetPhrases.map((phrase) =>
+      components.map((c) =>
+        scoreComponentAgainstTarget(
           c.name,
           c.type,
-          threat.component || "",
+          phrase,
           threat.threat || "",
-          threat.description || ""
-        ),
-      }))
-      .filter((x) => x.score >= 18)
-      .sort((a, b) => b.score - a.score);
+          threat.description || "",
+          sharedTokens
+        )
+      )
+    );
 
-    if (scored.length === 0) continue;
+    // Best deterministic winner(s) per segment
+    const segmentWinners = new Set<number>();
+    const bestScorePerComp = components.map((_, idx) =>
+      Math.max(0, ...segmentScores.map((s) => s[idx] ?? 0))
+    );
 
-    if (alreadyLinked.has(id)) {
-      // If the threat names a DFD component verbatim, ensure that component has it too
-      for (const match of scored) {
-        if (match.score === 100) {
-          sets[match.idx].add(id);
+    for (const scores of segmentScores) {
+      const ranked = scores
+        .map((score, idx) => ({ idx, score }))
+        .filter((x) => x.score >= 20)
+        .sort((a, b) => b.score - a.score);
+      if (ranked.length === 0) continue;
+      segmentWinners.add(ranked[0].idx);
+      // Include an exact-score tie at >= 92 (e.g. duplicated component label)
+      if (ranked[1] && ranked[1].score >= 92 && ranked[1].score === ranked[0].score) {
+        segmentWinners.add(ranked[1].idx);
+      }
+    }
+
+    const overallTopScore = Math.max(0, ...bestScorePerComp);
+    const llmIdxs = llmAssignedIndices.get(id) ?? [];
+
+    // 1. Validate LLM-assigned links: keep only links that are genuinely relevant
+    //    and do not contradict a much stronger deterministic component match.
+    const verifiedLlmIdxs: number[] = [];
+    for (const idx of llmIdxs) {
+      const s = bestScorePerComp[idx] ?? 0;
+      if (overallTopScore >= 42) {
+        const threshold = isComposite ? 42 : Math.max(42, overallTopScore - 10);
+        if (s >= threshold) {
+          verifiedLlmIdxs.push(idx);
+        }
+      } else if (overallTopScore >= 20) {
+        if (s >= 20) {
+          verifiedLlmIdxs.push(idx);
+        }
+      } else {
+        // No lexical match at all (e.g. DFD completely renamed a component):
+        // trust at most the first LLM assignment if the LLM explicitly linked it
+        if (verifiedLlmIdxs.length === 0) {
+          verifiedLlmIdxs.push(idx);
+        }
+      }
+    }
+
+    if (verifiedLlmIdxs.length > 0) {
+      for (const idx of verifiedLlmIdxs) {
+        sets[idx].add(id);
+      }
+      // Guarantee every deterministic segment winner with strong/exact match is linked
+      for (const idx of segmentWinners) {
+        if ((bestScorePerComp[idx] ?? 0) >= (isComposite ? 42 : 92)) {
+          sets[idx].add(id);
         }
       }
       continue;
     }
 
-    const topScore = scored[0].score;
-    // Always attach to top match; also attach a second match if tied or composite
-    sets[scored[0].idx].add(id);
-    if (scored[1] && scored[1].score >= Math.max(40, topScore - 15)) {
-      sets[scored[1].idx].add(id);
+    // 2. Deterministic attachment when LLM didn't link (or misplaced) the threat
+    for (const idx of segmentWinners) {
+      sets[idx].add(id);
     }
   }
 

@@ -320,6 +320,19 @@ export function ThreatModelStudio({
     setActiveTab("threats");
   }, []);
 
+  // Switch section tabs and scroll smoothly to the start of the tab section
+  // (flush below the 56px sticky top navbar, never jumping to the top of the whole page)
+  const handleTabSwitch = useCallback((tabId: TabId) => {
+    setHighlightedThreatId(null);
+    setActiveTab(tabId);
+    requestAnimationFrame(() => {
+      const el = resultsRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top + window.scrollY - 56;
+      window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    });
+  }, []);
+
   // Scroll smoothly to a threat card after switching from DFD -> Threat Model tab
   useEffect(() => {
     if (activeTab !== "threats" || !highlightedThreatId) return;
@@ -791,7 +804,7 @@ export function ThreatModelStudio({
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="Describe the application or review scope (primary input). If you include specific recommendations, suggestions, or a targeted focus area such as an API integration, threat modeling will center around those first; attached diagrams provide extra architectural context..."
-                  className="min-h-[140px] rounded-xl resize-y"
+                  className="min-h-[140px] max-h-[280px] overflow-y-auto thin-scrollbar rounded-xl resize-none"
                 />
                 <div className="flex items-center justify-between text-xs text-neutral-400">
                   <span>{deferredDescription.length} characters</span>
@@ -894,7 +907,7 @@ export function ThreatModelStudio({
         </Card>
 
         {/* Results */}
-        <div ref={resultsRef} className="mt-8 sm:mt-10">
+        <div ref={resultsRef} className="mt-8 sm:mt-10 scroll-mt-16">
           {error && (
             <div className="mb-6 flex items-start sm:items-center gap-3 p-4 rounded-xl bg-red-50 border border-red-200 text-red-900 break-words">
               <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 sm:mt-0" />
@@ -926,7 +939,8 @@ export function ThreatModelStudio({
                     return (
                       <button
                         key={tab.id}
-                        onClick={() => setActiveTab(tab.id)}
+                        type="button"
+                        onClick={() => handleTabSwitch(tab.id)}
                         className={`flex items-center gap-1.5 sm:gap-2 px-3.5 sm:px-4 py-2 rounded-full text-xs sm:text-sm font-medium transition-all whitespace-nowrap shrink-0 ${
                           activeTab === tab.id
                             ? "bg-neutral-900 text-white"

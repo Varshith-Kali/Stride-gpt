@@ -248,6 +248,30 @@
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
+
+  /* Subtle, slim right-side scrollbar for bounded textareas */
+  .thin-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(0.8 0 0) transparent;
+  }
+  .thin-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .thin-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+    margin: 6px 0;
+  }
+  .thin-scrollbar::-webkit-scrollbar-thumb {
+    background: oklch(0.82 0 0);
+    border-radius: 9999px;
+    border: 1px solid transparent;
+    background-clip: padding-box;
+  }
+  .thin-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.68 0 0);
+    background-clip: padding-box;
+  }
 }
 
 /* Custom scrollbar */
