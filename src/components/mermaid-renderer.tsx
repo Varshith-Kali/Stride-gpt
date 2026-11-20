@@ -260,6 +260,7 @@ export function MermaidRenderer({
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const mountedSvgRef = useRef<string>("");
   const onTagClickRef = useRef(onTagClick);
   useEffect(() => {
     onTagClickRef.current = onTagClick;
@@ -292,6 +293,7 @@ export function MermaidRenderer({
     setZoom(1);
     setHoveredInfo(null);
     setExpandedNode(null);
+    mountedSvgRef.current = "";
 
     const id = `mmd-${++renderCounter}`;
     const cleaned = sanitizeMermaidSource(source);
@@ -321,23 +323,50 @@ export function MermaidRenderer({
     };
   }, [source]);
 
-  // Attach neat, clickable SVG threat pills directly onto rendered Mermaid nodes
+  // Mount the Mermaid SVG imperatively (never via dangerouslySetInnerHTML) and
+  // attach clickable SVG threat pills directly onto rendered nodes. Keeping SVG
+  // DOM ownership out of React's reconciler guarantees hover/zoom/tooltip
+  // re-renders can never reset innerHTML and wipe out threat pills or listeners.
   useEffect(() => {
     if (rendering || error || !svg) return;
     const container = containerRef.current;
-    const svgEl = container?.querySelector("svg");
+    if (!container) return;
+
+    const needsMount =
+      mountedSvgRef.current !== svg || !container.querySelector("svg");
+    if (needsMount) {
+      container.innerHTML = svg;
+      mountedSvgRef.current = svg;
+    }
+
+    const svgEl = container.querySelector("svg");
     if (!svgEl) return;
+
+    if (needsMount) {
+      const initialVb = svgEl.getAttribute("viewBox") ?? "";
+      svgEl.dataset.baseViewBox = initialVb;
+      // Prevent adjacent edge labels from overlapping on dense hub nodes
+      deoverlapEdgeLabels(svgEl);
+    }
 
     // Clean up any previous tag overlay layers before rebuilding
     svgEl.querySelectorAll('[data-mmd-tag-layer="true"]').forEach((el) => el.remove());
 
-    // Prevent adjacent edge labels from overlapping on dense hub nodes
-    deoverlapEdgeLabels(svgEl);
+    const cleanups: Array<() => void> = [];
+    const handleSvgLeave = () => setHoveredInfo(null);
+    svgEl.addEventListener("mouseleave", handleSvgLeave);
+    cleanups.push(() => svgEl.removeEventListener("mouseleave", handleSvgLeave));
 
-    if (!nodeTags || Object.keys(nodeTags).length === 0) return;
+    if (!nodeTags || Object.keys(nodeTags).length === 0) {
+      if (svgEl.dataset.baseViewBox) {
+        svgEl.setAttribute("viewBox", svgEl.dataset.baseViewBox);
+      }
+      return () => {
+        cleanups.forEach((fn) => fn());
+      };
+    }
 
     const SVG_NS = "http://www.w3.org/2000/svg";
-    const cleanups: Array<() => void> = [];
     const { byId, byLabel } = indexMermaidNodes(svgEl);
 
     for (const [nodeId, info] of Object.entries(nodeTags)) {
@@ -514,10 +543,10 @@ export function MermaidRenderer({
       nodeEl.appendChild(layer);
     }
 
-    // Pad viewBox slightly if overlay pills extend past initial diagram bounds
+    // Pad viewBox slightly from the original base viewBox if overlay pills extend past diagram bounds
     try {
       const fullBox = svgEl.getBBox();
-      const rawVb = svgEl.getAttribute("viewBox");
+      const rawVb = svgEl.dataset.baseViewBox || svgEl.getAttribute("viewBox");
       if (rawVb && fullBox.width > 0 && fullBox.height > 0) {
         const parts = rawVb.trim().split(/\s+/).map(Number);
         if (parts.length === 4 && parts.every(Number.isFinite)) {
@@ -693,7 +722,6 @@ export function MermaidRenderer({
             width: `${Math.round(zoom * 100)}%`,
           }}
           className="mermaid-container mx-auto [&_svg]:w-full [&_svg]:!max-w-none [&_svg]:h-auto [&_svg]:mx-auto [&_svg]:block [&_.edgeLabel_rect]:!fill-white [&_.edgeLabel_rect]:!opacity-95 [&_.labelBkg]:!bg-white/95 [&_.edgeLabel]:!text-[11px] [&_.edgeLabel_text]:!text-[11px] [&_.edgeLabel_tspan]:!text-[11px] [&_.cluster-label_text]:!font-semibold transition-[width] duration-150"
-          dangerouslySetInnerHTML={{ __html: svg }}
         />
       </div>
 

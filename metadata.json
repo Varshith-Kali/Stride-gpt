@@ -1,7 +1,0 @@
-{
-  "name": "STRIDE GPT",
-  "description": "AI-powered threat modeling studio for generating STRIDE threat models, mitigations, safety metrics, and data flow diagrams.",
-  "capabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
-}

@@ -1,16 +1,16 @@
-# ─── Dependencies ─────────────────────────────────────────────────────────────
+# --- Dependencies -------------------------------------------------------------
 node_modules/
 .pnp
 .pnp.js
 .yarn/install-state.gz
 
-# ─── Next.js build output ─────────────────────────────────────────────────────
+# --- Next.js build output -----------------------------------------------------
 .next/
 out/
 build/
 dist/
 
-# ─── Environment & secrets ────────────────────────────────────────────────────
+# --- Environment & secrets ----------------------------------------------------
 # NEVER commit secrets or API keys.
 .env
 .env.local
@@ -18,34 +18,38 @@ dist/
 .env.test.local
 .env.production.local
 
-# ─── TypeScript cache ─────────────────────────────────────────────────────────
+# --- TypeScript cache ---------------------------------------------------------
 tsconfig.tsbuildinfo
 *.tsbuildinfo
 
-# ─── OS artefacts ─────────────────────────────────────────────────────────────
+# --- OS artefacts -------------------------------------------------------------
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# ─── Editor directories ───────────────────────────────────────────────────────
+# --- Editor directories -------------------------------------------------------
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# ─── Logs ─────────────────────────────────────────────────────────────────────
+# --- Logs ---------------------------------------------------------------------
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# ─── Testing ──────────────────────────────────────────────────────────────────
+# --- Testing ------------------------------------------------------------------
 coverage/
 .nyc_output/
 
-# ─── Misc ─────────────────────────────────────────────────────────────────────
+# --- Misc & platform metadata -------------------------------------------------
 *.local
 .vercel
 .turbo
+.aistudio/
+public/assets/aistudio/
+workspace/
+metadata.json

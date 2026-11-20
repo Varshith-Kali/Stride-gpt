@@ -1953,11 +1953,24 @@ function DfdTab({
 
 function CopyMermaidBar({ source }: { source: string }) {
   const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
   const copy = async () => {
-    await navigator.clipboard.writeText(source);
-    setCopied(true);
-    toast.success("Mermaid source copied -- paste into mermaid.live or draw.io");
-    setTimeout(() => setCopied(false), 2500);
+    try {
+      await navigator.clipboard.writeText(source);
+      setCopied(true);
+      toast.success("Mermaid source copied -- paste into mermaid.live or draw.io");
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => setCopied(false), 2500);
+    } catch {
+      toast.error("Unable to access clipboard. Expand the Mermaid source below to copy manually.");
+    }
   };
   return (
     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 sm:p-3.5 rounded-xl bg-neutral-50 border border-neutral-200">

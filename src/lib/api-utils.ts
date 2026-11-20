@@ -18,7 +18,7 @@ const rateStore = new Map<string, RateWindow>();
 
 // Periodic cleanup -- remove windows that haven't been touched in > 10 min.
 // Prevents unbounded memory growth in long-running deployments.
-setInterval(() => {
+const cleanupTimer = setInterval(() => {
   const now = Date.now();
   for (const [ip, w] of rateStore) {
     if (now - (w.timestamps.at(-1) ?? 0) > RATE_LIMIT_WINDOW_MS * 10) {
@@ -26,6 +26,7 @@ setInterval(() => {
     }
   }
 }, 10 * 60_000);
+cleanupTimer.unref?.();
 
 /**
  * Check rate limit for the given IP.

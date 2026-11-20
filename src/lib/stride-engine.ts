@@ -1233,7 +1233,7 @@ export async function generateDfd(
     const c = rawComp as Record<string, unknown>;
     if (typeof c.name !== "string") continue;
 
-    const cleanName = cleanDfdLabel(c.name, 36);
+    const cleanName = cleanDfdLabel(c.name, 44);
     if (!cleanName) continue;
 
     const key = cleanName.toLowerCase();
@@ -1266,8 +1266,8 @@ export async function generateDfd(
     const f = rawFlow as Record<string, unknown>;
     if (typeof f.from !== "string" || typeof f.to !== "string") continue;
 
-    const rawFrom = cleanDfdLabel(f.from, 36);
-    const rawTo = cleanDfdLabel(f.to, 36);
+    const rawFrom = cleanDfdLabel(f.from, 44);
+    const rawTo = cleanDfdLabel(f.to, 44);
     if (!rawFrom || !rawTo) continue;
 
     let from = canonicalNameByKey.get(rawFrom.toLowerCase());
@@ -1373,7 +1373,7 @@ export function dfdToMermaid(
     inboundCount.set(tk, (inboundCount.get(tk) ?? 0) + 1);
   }
 
-  const safeNodeLabel = (s: string) => cleanDfdLabel(s, 34) || "Component";
+  const safeNodeLabel = (s: string) => cleanDfdLabel(s, 44) || "Component";
   const safeEdgeLabel = (s: string) => cleanDfdLabel(s, 30) || "Data flow";
 
   type ZoneBucketKey = "ExternalClients" | "DMZ" | "Internal" | "Secure" | "ExternalServices";

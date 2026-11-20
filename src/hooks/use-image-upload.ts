@@ -116,13 +116,15 @@ export function useImageUpload(): UseImageUploadResult {
       }
 
       if (toAdd.length > 0) {
-        setImages((prev) => {
-          const room = Math.max(0, MAX_IMAGES - prev.length);
-          const accepted = toAdd.slice(0, room);
-          const rejected = toAdd.slice(room);
-          rejected.forEach((img) => URL.revokeObjectURL(img.previewUrl));
-          return [...prev, ...accepted];
-        });
+        const room = Math.max(0, MAX_IMAGES - imagesRef.current.length);
+        const accepted = toAdd.slice(0, room);
+        const rejected = toAdd.slice(room);
+        rejected.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+        if (accepted.length > 0) {
+          const next = [...imagesRef.current, ...accepted];
+          imagesRef.current = next;
+          setImages(next);
+        }
       }
 
       return errors;
@@ -131,18 +133,17 @@ export function useImageUpload(): UseImageUploadResult {
   );
 
   const removeImage = useCallback((id: string) => {
-    setImages((prev) => {
-      const img = prev.find((i) => i.id === id);
-      if (img) URL.revokeObjectURL(img.previewUrl);
-      return prev.filter((i) => i.id !== id);
-    });
+    const img = imagesRef.current.find((i) => i.id === id);
+    if (img) URL.revokeObjectURL(img.previewUrl);
+    const next = imagesRef.current.filter((i) => i.id !== id);
+    imagesRef.current = next;
+    setImages(next);
   }, []);
 
   const clearAll = useCallback(() => {
-    setImages((prev) => {
-      prev.forEach((i) => URL.revokeObjectURL(i.previewUrl));
-      return [];
-    });
+    imagesRef.current.forEach((i) => URL.revokeObjectURL(i.previewUrl));
+    imagesRef.current = [];
+    setImages([]);
   }, []);
 
   return {
